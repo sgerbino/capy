@@ -14,6 +14,9 @@
 #include <boost/capy/ex/any_dispatcher.hpp>
 #include <boost/capy/task.hpp>
 
+#if BOOST_CAPY_HAS_STOP_TOKEN
+#include <stop_token>
+#endif
 #include <utility>
 
 namespace boost {

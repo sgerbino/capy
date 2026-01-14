@@ -19,7 +19,9 @@
 
 #include <exception>
 #include <optional>
+#if BOOST_CAPY_HAS_STOP_TOKEN
 #include <stop_token>
+#endif
 #include <type_traits>
 #include <utility>
 #include <variant>
