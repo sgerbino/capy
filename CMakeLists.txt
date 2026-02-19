@@ -107,7 +107,11 @@ endif ()
 # Install
 #
 #-------------------------------------------------
-if (NOT BOOST_SUPERPROJECT_VERSION)
+if (BOOST_SUPERPROJECT_VERSION AND NOT CMAKE_VERSION VERSION_LESS 3.13)
+    boost_install(TARGETS boost_capy
+        VERSION ${BOOST_SUPERPROJECT_VERSION}
+        HEADER_DIRECTORY include)
+elseif (NOT BOOST_SUPERPROJECT_VERSION)
     include(CMakePackageConfigHelpers)
     include(GNUInstallDirs)
 
