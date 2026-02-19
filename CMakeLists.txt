@@ -38,6 +38,7 @@ if (BOOST_CAPY_IS_ROOT)
     include(CTest)
 endif ()
 option(BOOST_CAPY_BUILD_TESTS "Build boost::capy tests" ${BUILD_TESTING})
+option(BOOST_CAPY_BUILD_BENCH "Build boost::capy benchmarks" ${BOOST_CAPY_IS_ROOT})
 option(BOOST_CAPY_BUILD_EXAMPLES "Build boost::capy examples" ${BOOST_CAPY_IS_ROOT})
 option(BOOST_CAPY_MRDOCS_BUILD "Build the target for MrDocs: see mrdocs.yml" OFF)
 
@@ -57,7 +58,9 @@ source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src PREFIX "src" FILES ${BOOST_CAP
 
 function(boost_capy_setup_properties target)
     target_compile_features(${target} PUBLIC cxx_std_20)
-    target_include_directories(${target} PUBLIC "${PROJECT_SOURCE_DIR}/include")
+    target_include_directories(${target} PUBLIC
+        "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+        "$<INSTALL_INTERFACE:include>")
     target_include_directories(${target} PRIVATE "${PROJECT_SOURCE_DIR}")
     target_compile_definitions(${target} PUBLIC BOOST_CAPY_NO_LIB)
     target_compile_definitions(${target} PRIVATE BOOST_CAPY_SOURCE)
@@ -81,6 +84,7 @@ endif()
 add_library(boost_capy include/boost/capy.hpp build/Jamfile ${BOOST_CAPY_HEADERS} ${BOOST_CAPY_SOURCES})
 add_library(Boost::capy ALIAS boost_capy)
 boost_capy_setup_properties(boost_capy)
+set_target_properties(boost_capy PROPERTIES EXPORT_NAME capy)
 
 # Disable IPO/LTCG - causes LNK2016 errors with MSVC
 set_target_properties(boost_capy PROPERTIES
@@ -94,7 +98,42 @@ set_target_properties(boost_capy PROPERTIES
 # Benchmarks
 #
 #-------------------------------------------------
-add_subdirectory(bench)
+if (BOOST_CAPY_BUILD_BENCH)
+    add_subdirectory(bench)
+endif ()
+
+#-------------------------------------------------
+#
+# Install
+#
+#-------------------------------------------------
+if (NOT BOOST_SUPERPROJECT_VERSION)
+    include(CMakePackageConfigHelpers)
+    include(GNUInstallDirs)
+
+    install(TARGETS boost_capy
+        EXPORT boost_capy-targets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
+    install(DIRECTORY include/boost
+        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+
+    install(EXPORT boost_capy-targets
+        NAMESPACE Boost::
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/boost_capy")
+
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/boost_capy-config-version.cmake"
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY AnyNewerVersion)
+
+    install(FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/boost_capy-config.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/boost_capy-config-version.cmake"
+        DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/boost_capy")
+endif ()
 
 #-------------------------------------------------
 #

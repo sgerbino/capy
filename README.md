@@ -16,11 +16,9 @@ Clone and build with CMake:
 ```bash
 git clone https://github.com/cppalliance/capy.git
 cd capy
-cmake --preset standalone
-cmake --build --preset standalone
+cmake -B _build -DCMAKE_BUILD_TYPE=Release
+cmake --build _build
 ```
-
-The library is built to `out/standalone/`.
 
 ## Related Libraries
 
@@ -88,6 +86,11 @@ The standardization strategy follows from this layering. Capy is the foundation 
 - CMake 3.20 or later
 - C++20 compiler (GCC 12+, Clang 17+, MSVC 14.34+)
 - Ninja (recommended) or other CMake generator
+
+## Installation
+
+See [INSTALL.md](INSTALL.md) for detailed instructions on consuming
+Capy via `find_package` or `FetchContent`.
 
 ## License
 
