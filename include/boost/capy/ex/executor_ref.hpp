@@ -12,6 +12,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/detail/type_id.hpp>
+#include <boost/capy/detail/work_item.hpp>
 #include <concepts>
 #include <coroutine>
 #include <type_traits>
@@ -31,6 +32,7 @@ struct executor_vtable
     void (*on_work_started)(void const*) noexcept;
     void (*on_work_finished)(void const*) noexcept;
     void (*post)(void const*, std::coroutine_handle<>);
+    void (*enqueue)(void const*, work_item*);
     std::coroutine_handle<> (*dispatch)(void const*, std::coroutine_handle<>);
     bool (*equals)(void const*, void const*) noexcept;
     detail::type_info const* type_id;
@@ -54,6 +56,10 @@ inline constexpr executor_vtable vtable_for = {
     // post
     [](void const* p, std::coroutine_handle<> h) {
         static_cast<Ex const*>(p)->post(h);
+    },
+    // enqueue
+    [](void const* p, work_item* w) {
+        static_cast<Ex const*>(p)->enqueue(w);
     },
     // dispatch
     [](void const* p, std::coroutine_handle<> h) -> std::coroutine_handle<> {
@@ -228,6 +234,22 @@ public:
     void post(std::coroutine_handle<> h) const
     {
         vt_->post(ex_, h);
+    }
+
+    /** Enqueue an inline work item without allocation.
+
+        The work item must remain alive from this call until
+        its @ref work_item::execute method returns.
+
+        @param w The work item to enqueue.
+
+        @pre This instance was constructed with a valid executor.
+
+        @see work_item
+    */
+    void enqueue(work_item* w) const
+    {
+        vt_->enqueue(ex_, w);
     }
 
     /** Compares two executor references for equality.

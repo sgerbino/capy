@@ -217,14 +217,18 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         auto transform_awaitable(Awaitable&& a)
         {
             using A = std::decay_t<Awaitable>;
-            if constexpr (IoAwaitable<A>)
+            if constexpr (requires { std::forward<Awaitable>(a).as_awaitable(*this); })
+            {
+                return std::forward<Awaitable>(a).as_awaitable(*this);
+            }
+            else if constexpr (IoAwaitable<A>)
             {
                 return transform_awaiter<Awaitable>{
                     std::forward<Awaitable>(a), this};
             }
             else
             {
-                static_assert(sizeof(A) == 0, "requires IoAwaitable");
+                static_assert(sizeof(A) == 0, "requires IoAwaitable or as_awaitable");
             }
         }
     };

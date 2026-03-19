@@ -11,6 +11,7 @@
 #define BOOST_CAPY_EX_STRAND_HPP
 
 #include <boost/capy/detail/config.hpp>
+#include <boost/capy/detail/work_item.hpp>
 #include <coroutine>
 #include <boost/capy/ex/detail/strand_service.hpp>
 
@@ -215,6 +216,13 @@ public:
     post(std::coroutine_handle<> h) const
     {
         detail::strand_service::post(*impl_, executor_ref(ex_), h);
+    }
+
+    /// Enqueue an inline work item. Delegates to the inner executor.
+    void
+    enqueue(work_item* w) const
+    {
+        ex_.enqueue(w);
     }
 
     /** Dispatch a coroutine through the strand.

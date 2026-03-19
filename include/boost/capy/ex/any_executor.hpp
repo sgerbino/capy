@@ -11,6 +11,7 @@
 #define BOOST_CAPY_ANY_EXECUTOR_HPP
 
 #include <boost/capy/detail/config.hpp>
+#include <boost/capy/detail/work_item.hpp>
 #include <concepts>
 #include <coroutine>
 #include <memory>
@@ -93,6 +94,7 @@ class any_executor
         virtual void on_work_finished() const noexcept = 0;
         virtual std::coroutine_handle<> dispatch(std::coroutine_handle<>) const = 0;
         virtual void post(std::coroutine_handle<>) const = 0;
+        virtual void enqueue(work_item*) const = 0;
         virtual bool equals(impl_base const*) const noexcept = 0;
         virtual std::type_info const& target_type() const noexcept = 0;
     };
@@ -131,6 +133,11 @@ class any_executor
         void post(std::coroutine_handle<> h) const override
         {
             ex_.post(h);
+        }
+
+        void enqueue(work_item* w) const override
+        {
+            ex_.enqueue(w);
         }
 
         bool equals(impl_base const* other) const noexcept override
@@ -270,6 +277,19 @@ public:
     void post(std::coroutine_handle<> h) const
     {
         p_->post(h);
+    }
+
+    /** Enqueue an inline work item without allocation.
+
+        @param w The work item to enqueue.
+
+        @pre This instance holds a valid executor.
+
+        @see work_item
+    */
+    void enqueue(work_item* w) const
+    {
+        p_->enqueue(w);
     }
 
     /** Compares two executor wrappers for equality.

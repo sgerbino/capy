@@ -11,6 +11,7 @@
 #define BOOST_CAPY_CONCEPT_EXECUTOR_HPP
 
 #include <boost/capy/detail/config.hpp>
+#include <boost/capy/detail/work_item.hpp>
 
 #include <concepts>
 #include <coroutine>
@@ -128,6 +129,7 @@ class execution_context;
         std::coroutine_handle<> dispatch(
             std::coroutine_handle<> h ) const;
         void post( std::coroutine_handle<> h ) const;
+        void enqueue( work_item* w ) const;
 
         bool operator==( E const& ) const noexcept;
     };
@@ -139,7 +141,8 @@ template<class E>
 concept Executor =
     std::is_nothrow_copy_constructible_v<E> &&
     std::is_nothrow_move_constructible_v<E> &&
-    requires(E& e, E const& ce, E const& ce2, std::coroutine_handle<> h) {
+    requires(E& e, E const& ce, E const& ce2,
+             std::coroutine_handle<> h, work_item* w) {
         { ce == ce2 } noexcept -> std::convertible_to<bool>;
         { ce.context() } noexcept;
         requires std::is_lvalue_reference_v<decltype(ce.context())> &&
@@ -151,6 +154,7 @@ concept Executor =
 
         { ce.dispatch(h) } -> std::same_as<std::coroutine_handle<>>;
         { ce.post(h) };
+        { ce.enqueue(w) };
     };
 
 } // capy

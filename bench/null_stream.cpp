@@ -16,9 +16,11 @@
 // I/O work.
 //
 // Two implementations are compared:
-//   - capy:  IoAwaitable with await_suspend posting the coroutine handle
-//   - beman: beman::execution::task with as_awaitable returning an
-//            inline work item (zero allocation per read)
+//   - capy:  as_awaitable bypassing transform_awaiter, inline work item
+//   - beman: beman::execution::task with as_awaitable, inline work item
+//
+// Both use the same thread pool (bench_thread_pool) so the comparison
+// measures only the coroutine framework overhead.
 //
 
 #include <beman/execution/execution.hpp>
@@ -39,52 +41,7 @@ namespace ex = beman::execution;
 namespace capy = boost::capy;
 
 // ===================================================================
-// capy benchmark
-// ===================================================================
-
-struct capy_null_stream
-{
-    struct awaitable
-    {
-        bool await_ready() const noexcept { return false; }
-
-        void await_suspend(
-            std::coroutine_handle<> h,
-            capy::io_env const* env)
-        {
-            env->executor.post(h);
-        }
-
-        capy::io_result<std::size_t> await_resume()
-        {
-            return {{}, 0};
-        }
-    };
-
-    awaitable read_some(capy::mutable_buffer)
-    {
-        return {};
-    }
-};
-
-capy::task<> capy_benchmark()
-{
-    capy_null_stream stream;
-    char buf[64];
-
-    auto start = std::chrono::steady_clock::now();
-
-    for (int i = 0; i < 10'000; ++i)
-        (void)co_await stream.read_some(capy::mutable_buffer(buf, sizeof(buf)));
-
-    auto elapsed = std::chrono::steady_clock::now() - start;
-    auto us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
-    std::printf("capy:  10,000 read_some calls in %lld us\n",
-        static_cast<long long>(us));
-}
-
-// ===================================================================
-// inlined thread pool for beman benchmark
+// shared thread pool (used by both benchmarks)
 // ===================================================================
 
 template <typename T>
@@ -130,7 +87,6 @@ public:
     }
 };
 
-// Base for work items that can be directly enqueued without allocation
 struct work_item : intrusive_queue<work_item>::node
 {
     virtual void execute() noexcept = 0;
@@ -140,7 +96,6 @@ protected:
 
 class bench_thread_pool
 {
-    // Heap-allocated wrapper for raw coroutine handles
     struct coro_work : work_item
     {
         std::coroutine_handle<> h_;
@@ -271,6 +226,70 @@ public:
         cv_.notify_all();
     }
 };
+
+// ===================================================================
+// capy benchmark
+// ===================================================================
+
+struct capy_null_stream
+{
+    bench_thread_pool* pool_;
+
+    struct read_awaitable : work_item
+    {
+        bench_thread_pool* pool_;
+        std::coroutine_handle<> h_{};
+
+        explicit read_awaitable(bench_thread_pool* p) noexcept : pool_(p) {}
+
+        bool await_ready() const noexcept { return false; }
+
+        void await_suspend(std::coroutine_handle<> h)
+        {
+            h_ = h;
+            pool_->enqueue(this);
+        }
+
+        std::size_t await_resume() noexcept { return 0; }
+
+        void execute() noexcept override
+        {
+            h_.resume();
+        }
+    };
+
+    struct read_op
+    {
+        bench_thread_pool* pool_;
+
+        template <typename Promise>
+        auto as_awaitable(Promise&) -> read_awaitable
+        {
+            return read_awaitable{pool_};
+        }
+    };
+
+    read_op read_some(capy::mutable_buffer)
+    {
+        return {pool_};
+    }
+};
+
+capy::task<> capy_benchmark(bench_thread_pool& pool)
+{
+    capy_null_stream stream{&pool};
+    char buf[64];
+
+    auto start = std::chrono::steady_clock::now();
+
+    for (int i = 0; i < 100'000; ++i)
+        (void)co_await stream.read_some(capy::mutable_buffer(buf, sizeof(buf)));
+
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    auto us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
+    std::printf("capy:  100,000 read_some calls in %lld us\n",
+        static_cast<long long>(us));
+}
 
 // ===================================================================
 // beman::execution infrastructure
@@ -492,12 +511,12 @@ auto beman_benchmark(
 
     auto start = std::chrono::steady_clock::now();
 
-    for (int i = 0; i < 10'000; ++i)
+    for (int i = 0; i < 100'000; ++i)
         (void)co_await stream.read_some(buf);
 
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto us = std::chrono::duration_cast<std::chrono::microseconds>(elapsed).count();
-    std::printf("beman: 10,000 read_some calls in %lld us\n",
+    std::printf("beman: 100,000 read_some calls in %lld us\n",
         static_cast<long long>(us));
 }
 
@@ -508,9 +527,11 @@ auto beman_benchmark(
 int main()
 {
     {
+        bench_thread_pool bpool(1);
         capy::thread_pool pool(1);
-        capy::run_async(pool.get_executor())(capy_benchmark());
+        capy::run_async(pool.get_executor())(capy_benchmark(bpool));
         pool.join();
+        bpool.join();
     }
 
     {
