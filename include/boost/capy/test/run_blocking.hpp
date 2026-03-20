@@ -13,6 +13,7 @@
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/concept/execution_context.hpp>
 #include <boost/capy/concept/executor.hpp>
+#include <boost/capy/detail/work_item.hpp>
 #include <boost/capy/ex/run_async.hpp>
 
 #include <coroutine>
@@ -94,6 +95,16 @@ struct BOOST_CAPY_DECL blocking_executor
     */
     void
     post(std::coroutine_handle<> h) const;
+
+    /** Enqueue a work item for inline execution.
+
+        @param w The work item to execute.
+    */
+    void
+    enqueue(work_item* w) const
+    {
+        w->execute();
+    }
 
 private:
     blocking_context* ctx_;

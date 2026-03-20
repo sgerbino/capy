@@ -8,7 +8,7 @@
 #
 
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR} PREFIX "" FILES
-    CMakeLists.txt bench.cpp allocation.cpp null_stream.cpp)
+    CMakeLists.txt bench.cpp allocation.cpp type_erasure.cpp)
 
 add_executable(boost_capy_bench bench.cpp)
 target_link_libraries(boost_capy_bench PRIVATE Boost::capy)
@@ -29,9 +29,9 @@ if(BOOST_CAPY_BUILD_P2300_EXAMPLES)
     )
     FetchContent_MakeAvailable(beman-task)
 
-    add_executable(boost_capy_bench_null_stream null_stream.cpp)
-    target_compile_features(boost_capy_bench_null_stream PRIVATE cxx_std_23)
-    target_link_libraries(boost_capy_bench_null_stream PRIVATE
+    add_executable(boost_capy_bench_type_erasure type_erasure.cpp)
+    target_compile_features(boost_capy_bench_type_erasure PRIVATE cxx_std_23)
+    target_link_libraries(boost_capy_bench_type_erasure PRIVATE
         Boost::capy beman::task beman::execution_headers)
 endif()
 

@@ -91,6 +91,11 @@ public:
         h.resume();
     }
 
+    void enqueue(work_item* w) const
+    {
+        w->execute();
+    }
+
     void defer(std::coroutine_handle<> h) const
     {
         h.resume();
