@@ -28,6 +28,12 @@
 //   the operation state because its type is erased.
 //   One session instantiation, one allocation per read_some.
 //
+// Column D — D4126 bridge (sender consumes type-erased awaitable)
+//   Virtual base returns an awaitable. as_sender_d4126 wraps it using
+//   a frame_cb — a synthetic coroutine frame matching compiler ABI.
+//   The sender's operation state is inline. Zero per-operation
+//   allocation, one session instantiation, sender-compatible.
+//
 
 #include "beman_env.hpp"
 #include <boost/capy.hpp>
@@ -533,6 +539,143 @@ auto benchmark_c(
 }
 
 // ===================================================================
+// Column D — D4126 bridge (sender consumes type-erased awaitable)
+//
+// Virtual base returns an awaitable (same as Column A). The session
+// wraps it with as_sender_d4126, which uses a frame_cb — a synthetic
+// coroutine frame whose layout matches MSVC/GCC/Clang — to drive the
+// awaitable without a real coroutine. The frame_cb is stored inline
+// in the io_task's coroutine frame. Zero per-operation allocation.
+// One session instantiation.
+//
+// This is the D4126R0 thesis: awaitables can be consumed by senders
+// at zero allocation cost because coroutine_handle<> is a universal
+// continuation, and from_address(&frame_cb) produces a valid handle.
+// ===================================================================
+
+namespace detail {
+
+struct frame_cb
+{
+    void (*resume)(frame_cb*);
+    void (*destroy)(frame_cb*);
+    void* data;
+};
+
+} // namespace detail
+
+template <class Aw>
+struct d4126_sender
+{
+    using sender_concept = ex::sender_t;
+    using completion_signatures =
+        ex::completion_signatures<ex::set_value_t(std::size_t)>;
+
+    Aw aw_;
+
+    template <typename Promise>
+    auto as_awaitable(Promise&)
+    {
+        struct bridge_aw
+        {
+            Aw aw_;
+            detail::frame_cb cb_{};
+            std::coroutine_handle<> cont_{};
+            std::size_t result_{};
+
+            bool await_ready() { return aw_.await_ready(); }
+
+            void await_suspend(std::coroutine_handle<> h) noexcept
+            {
+                cont_ = h;
+                cb_.resume = +[](detail::frame_cb* p) {
+                    auto* self =
+                        static_cast<bridge_aw*>(p->data);
+                    self->result_ = self->aw_.await_resume();
+                    self->cont_.resume();
+                };
+                cb_.destroy = +[](detail::frame_cb*) {};
+                cb_.data = this;
+
+                auto fake_h =
+                    std::coroutine_handle<>::from_address(
+                        static_cast<void*>(&cb_));
+                aw_.await_suspend(fake_h);
+            }
+
+            std::size_t await_resume() noexcept
+            {
+                return result_;
+            }
+        };
+        return bridge_aw{std::move(aw_)};
+    }
+};
+
+template <class Aw>
+auto as_sender_d4126(Aw aw) -> d4126_sender<Aw>
+{
+    return {std::move(aw)};
+}
+
+struct stream_base_d
+{
+    virtual read_awaitable_a read_some(capy::mutable_buffer) = 0;
+    virtual ~stream_base_d() = default;
+};
+
+struct noop_stream_d : stream_base_d
+{
+    bench_thread_pool* pool_;
+
+    explicit noop_stream_d(bench_thread_pool* p) noexcept : pool_(p) {}
+
+    read_awaitable_a read_some(capy::mutable_buffer) override
+    {
+        return read_awaitable_a{pool_};
+    }
+};
+
+auto inner_d(
+    stream_base_d& stream,
+    std::allocator_arg_t,
+    std::pmr::polymorphic_allocator<std::byte>) -> io_task<>
+{
+    char buf[64];
+    for (int i = 0; i < 10'000; ++i)
+        (void)co_await as_sender_d4126(
+            stream.read_some(
+                capy::mutable_buffer(buf, sizeof(buf))));
+}
+
+auto benchmark_d(
+    bench_thread_pool* pool,
+    stream_base_d& stream,
+    std::allocator_arg_t,
+    std::pmr::polymorphic_allocator<std::byte> alloc) -> io_task<>
+{
+    auto before = g_alloc_count.load(std::memory_order_relaxed);
+    auto start = std::chrono::steady_clock::now();
+
+    for (int i = 0; i < 10'000; ++i)
+        co_await inner_d(stream, std::allocator_arg, alloc);
+
+    auto elapsed = std::chrono::steady_clock::now() - start;
+    auto after = g_alloc_count.load(std::memory_order_relaxed);
+    auto us = std::chrono::duration_cast<
+        std::chrono::microseconds>(elapsed).count();
+    auto allocs = after - before;
+
+    std::printf(
+        "D  D4126 bridge           %10lld us  %5.1f ns/op  "
+        "%lld allocs (%4.2f/op)\n",
+        static_cast<long long>(us),
+        static_cast<double>(us) * 1000.0 / 100'000'000.0,
+        static_cast<long long>(allocs),
+        static_cast<double>(allocs) / 100'000'000.0);
+}
+
+// ===================================================================
 // main
 // ===================================================================
 
@@ -581,6 +724,20 @@ int main()
         auto* mr = capy::get_recycling_memory_resource();
         ex::sync_wait(ex::starts_on(sched,
             benchmark_c(
+                &pool, stream,
+                std::allocator_arg,
+                std::pmr::polymorphic_allocator<std::byte>(mr))));
+        pool.join();
+    }
+
+    // Column D — D4126 bridge (sender consumes type-erased awaitable)
+    {
+        bench_thread_pool pool(1);
+        noop_stream_d stream{&pool};
+        pool_scheduler sched{sender_executor{&pool}};
+        auto* mr = capy::get_recycling_memory_resource();
+        ex::sync_wait(ex::starts_on(sched,
+            benchmark_d(
                 &pool, stream,
                 std::allocator_arg,
                 std::pmr::polymorphic_allocator<std::byte>(mr))));
