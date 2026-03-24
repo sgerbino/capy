@@ -83,6 +83,25 @@ struct sender_as_capy_executor
 
 namespace ex = beman::execution;
 
+struct get_sender_executor_t
+{
+    constexpr bool query(
+        ex::forwarding_query_t const&) const noexcept
+    {
+        return true;
+    }
+
+    template <typename Env>
+        requires requires(Env const& env) {
+            env.query(std::declval<get_sender_executor_t const&>());
+        }
+    auto operator()(Env const& env) const noexcept
+    {
+        return env.query(*this);
+    }
+};
+inline constexpr get_sender_executor_t get_sender_executor{};
+
 struct pool_scheduler
 {
     using scheduler_concept = ex::scheduler_t;
@@ -97,6 +116,13 @@ struct pool_scheduler
         ) const noexcept
         {
             return pool_scheduler{ex_};
+        }
+
+        auto query(
+            get_sender_executor_t const&
+        ) const noexcept -> sender_executor
+        {
+            return ex_;
         }
     };
 
@@ -150,25 +176,6 @@ struct pool_scheduler
     auto schedule() -> sender { return {ex_}; }
     bool operator==(pool_scheduler const&) const = default;
 };
-
-struct get_sender_executor_t
-{
-    constexpr bool query(
-        ex::forwarding_query_t const&) const noexcept
-    {
-        return true;
-    }
-
-    template <typename Env>
-        requires requires(Env const& env) {
-            env.query(std::declval<get_sender_executor_t const&>());
-        }
-    auto operator()(Env const& env) const noexcept
-    {
-        return env.query(*this);
-    }
-};
-inline constexpr get_sender_executor_t get_sender_executor{};
 
 struct io_env
 {

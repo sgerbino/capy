@@ -255,11 +255,21 @@ struct awaitable_sender
             }
         }
 
+        static sender_executor extract_executor(auto const& renv)
+        {
+            if constexpr (requires {
+                get_sender_executor(renv); })
+                return get_sender_executor(renv);
+            else
+                return beman::execution::get_scheduler(
+                    renv).ex_;
+        }
+
         void start() noexcept
         {
             auto renv = beman::execution::get_env(rcvr_);
             adapter_ = sender_as_capy_executor{
-                get_sender_executor(renv)};
+                extract_executor(renv)};
 
             std::stop_token st;
             if constexpr (requires {

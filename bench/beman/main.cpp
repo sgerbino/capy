@@ -27,6 +27,7 @@
 #include "awaitable_sender.hpp"
 #include "ioaw_read_stream.hpp"
 #include "ioaw_io_read_stream.hpp"
+#include "repeat_effect_until.hpp"
 #include "sender_awaitable.hpp"
 #include "sndr_any_read_sender.hpp"
 #include "sndr_any_read_stream.hpp"
@@ -210,257 +211,6 @@ auto sndr_accept_ioaw(
 }
 
 // ===================================================================
-// Table 3: sender/receiver pipeline — Native (Column A)
-//
-// Concrete sndr_read_stream, connect/start driven by callback
-// receiver. Inline op_state, zero allocation per operation.
-// ===================================================================
-
-struct native_pipeline_runner;
-
-struct native_pipeline_receiver
-{
-    using receiver_concept = bex::receiver_t;
-    native_pipeline_runner* runner_;
-
-    struct env_t {};
-    auto get_env() const noexcept -> env_t { return {}; }
-
-    void set_value(std::size_t) && noexcept;
-    void set_stopped() && noexcept {}
-
-    template <class E>
-    void set_error(E&&) && noexcept { std::terminate(); }
-};
-
-using native_sender_t = sndr_read_stream::read_sender;
-using native_op_t = native_sender_t::op_state<native_pipeline_receiver>;
-
-struct native_pipeline_runner
-{
-    sndr_read_stream& stream_;
-    int remaining_;
-    std::latch& done_;
-    int64_t alloc_before_;
-    std::chrono::steady_clock::time_point start_time_;
-    cell_result result_{};
-
-    alignas(native_op_t) char op_buf_[sizeof(native_op_t)];
-    bool op_active_ = false;
-
-    void destroy_op()
-    {
-        if (op_active_)
-        {
-            reinterpret_cast<native_op_t*>(op_buf_)->~native_op_t();
-            op_active_ = false;
-        }
-    }
-
-    void run_one()
-    {
-        if (remaining_ <= 0)
-        {
-            destroy_op();
-            auto elapsed =
-                std::chrono::steady_clock::now() - start_time_;
-            result_ = {
-                std::chrono::duration_cast<
-                    std::chrono::microseconds>(elapsed).count(),
-                g_alloc_count.load(std::memory_order_relaxed)
-                    - alloc_before_};
-            done_.count_down();
-            return;
-        }
-        --remaining_;
-
-        destroy_op();
-
-        char buf[64];
-        auto* op = ::new (op_buf_) native_op_t(
-            stream_.read_some(buf)
-            .connect(native_pipeline_receiver{this}));
-        op_active_ = true;
-        bex::start(*op);
-    }
-};
-
-void native_pipeline_receiver::set_value(std::size_t) && noexcept
-{
-    runner_->run_one();
-}
-
-// ===================================================================
-// Table 3: sender/receiver pipeline — Abstract / Type erased
-//
-// Stream returns sndr_any_read_sender. connect() heap-allocates
-// the operation state via unique_ptr<op_base>. Templated on
-// stream type so it works with both sndr_io_read_stream (abstract)
-// and sndr_any_read_stream (value-type erased).
-// ===================================================================
-
-template <class Stream>
-struct pipeline_runner
-{
-    Stream& stream_;
-    int remaining_;
-    std::latch& done_;
-    int64_t alloc_before_;
-    std::chrono::steady_clock::time_point start_time_;
-    cell_result result_{};
-
-    std::unique_ptr<sndr_any_read_sender::op_base> op_;
-
-    void run_one()
-    {
-        if (remaining_ <= 0)
-        {
-            op_.reset();
-            auto elapsed =
-                std::chrono::steady_clock::now() - start_time_;
-            result_ = {
-                std::chrono::duration_cast<
-                    std::chrono::microseconds>(elapsed).count(),
-                g_alloc_count.load(std::memory_order_relaxed)
-                    - alloc_before_};
-            done_.count_down();
-            return;
-        }
-        --remaining_;
-
-        op_.reset();
-
-        char buf[64];
-        auto sender = stream_.read_some(
-            capy::mutable_buffer(buf, sizeof(buf)));
-        op_ = sender.connect(
-            this,
-            +[](void* p, std::size_t) noexcept {
-                static_cast<pipeline_runner*>(p)->run_one();
-            },
-            +[](void*) noexcept {});
-        op_->start();
-    }
-};
-
-// ===================================================================
-// Table 3: sender/receiver pipeline — Column B (awaitable via bridge)
-//
-// IoAwaitable stream bridged to sender via as_sender/frame_cb.
-// The pipeline receiver provides get_sender_executor so the bridge
-// can construct an io_env for the awaitable's await_suspend.
-// ===================================================================
-
-template <class Stream>
-struct ioaw_pipeline_runner;
-
-template <class Stream>
-struct ioaw_pipeline_receiver
-{
-    using receiver_concept = bex::receiver_t;
-    ioaw_pipeline_runner<Stream>* runner_;
-
-    struct env_t
-    {
-        sender_executor ex_;
-
-        auto query(get_sender_executor_t const&) const noexcept
-            -> sender_executor
-        {
-            return ex_;
-        }
-    };
-
-    auto get_env() const noexcept -> env_t;
-
-    void set_value(std::size_t) && noexcept;
-    void set_value() && noexcept;
-    void set_stopped() && noexcept {}
-
-    template <class E>
-    void set_error(E&&) && noexcept { std::terminate(); }
-};
-
-template <class Stream>
-struct ioaw_pipeline_runner
-{
-    Stream& stream_;
-    sender_executor ex_;
-    int remaining_;
-    std::latch& done_;
-    int64_t alloc_before_;
-    std::chrono::steady_clock::time_point start_time_;
-    cell_result result_{};
-
-    using awaitable_t = decltype(
-        std::declval<Stream&>().read_some(
-            std::declval<capy::mutable_buffer>()));
-    using sender_t = capy::awaitable_sender<awaitable_t>;
-    using rcvr_t = ioaw_pipeline_receiver<Stream>;
-    using op_t = sender_t::template op_state<rcvr_t>;
-
-    alignas(op_t) char op_buf_[sizeof(op_t)];
-    bool op_active_ = false;
-
-    void destroy_op()
-    {
-        if (op_active_)
-        {
-            reinterpret_cast<op_t*>(op_buf_)->~op_t();
-            op_active_ = false;
-        }
-    }
-
-    void run_one()
-    {
-        if (remaining_ <= 0)
-        {
-            destroy_op();
-            auto elapsed =
-                std::chrono::steady_clock::now() - start_time_;
-            result_ = {
-                std::chrono::duration_cast<
-                    std::chrono::microseconds>(elapsed).count(),
-                g_alloc_count.load(std::memory_order_relaxed)
-                    - alloc_before_};
-            done_.count_down();
-            return;
-        }
-        --remaining_;
-
-        destroy_op();
-
-        char buf[64];
-        auto* op = ::new (op_buf_) op_t(
-            capy::as_sender(stream_.read_some(
-                capy::mutable_buffer(buf, sizeof(buf))))
-            .connect(rcvr_t{this}));
-        op_active_ = true;
-        bex::start(*op);
-    }
-};
-
-template <class Stream>
-auto ioaw_pipeline_receiver<Stream>::get_env()
-    const noexcept -> env_t
-{
-    return {runner_->ex_};
-}
-
-template <class Stream>
-void ioaw_pipeline_receiver<Stream>::set_value(
-    std::size_t) && noexcept
-{
-    runner_->run_one();
-}
-
-template <class Stream>
-void ioaw_pipeline_receiver<Stream>::set_value() && noexcept
-{
-    runner_->run_one();
-}
-
-// ===================================================================
 // main
 // ===================================================================
 
@@ -510,9 +260,10 @@ int main()
     // Native — sndr_read_stream
     {
         sender_thread_pool pool(1);
+        auto ex = pool.get_executor();
         bench_context ctx;
-        sender_as_capy_executor adapter{pool.get_executor(), &ctx};
-        sndr_read_stream stream{pool.get_executor()};
+        sender_as_capy_executor adapter{ex, &ctx};
+        sndr_read_stream stream{ex};
         capy::run_async(adapter)(
             accept_sndr(stream, grid[0][0][1]));
         pool.join();
@@ -521,9 +272,10 @@ int main()
     // Abstract — sndr_io_read_stream
     {
         sender_thread_pool pool(1);
+        auto ex = pool.get_executor();
         bench_context ctx;
-        sender_as_capy_executor adapter{pool.get_executor(), &ctx};
-        sndr_io_read_stream_impl stream{pool.get_executor()};
+        sender_as_capy_executor adapter{ex, &ctx};
+        sndr_io_read_stream_impl stream{ex};
         capy::run_async(adapter)(
             accept_sndr(
                 static_cast<sndr_io_read_stream&>(stream),
@@ -534,10 +286,10 @@ int main()
     // Type erased — sndr_any_read_stream
     {
         sender_thread_pool pool(1);
+        auto ex = pool.get_executor();
         bench_context ctx;
-        sender_as_capy_executor adapter{pool.get_executor(), &ctx};
-        sndr_any_read_stream stream(
-            sndr_read_stream{pool.get_executor()});
+        sender_as_capy_executor adapter{ex, &ctx};
+        sndr_any_read_stream stream(sndr_read_stream{ex});
         capy::run_async(adapter)(
             accept_sndr(stream, grid[0][2][1]));
         pool.join();
@@ -645,22 +397,38 @@ int main()
     }
 
     // ---------------------------------------------------------------
-    // Table 3: sender/receiver pipeline
+    // Table 3: sender/receiver pipeline (repeat_effect_until)
     // ---------------------------------------------------------------
+
+    // Col A: Sender (native)
 
     // Native — sndr_read_stream
     {
         sender_thread_pool pool(1);
-        sndr_read_stream stream{pool.get_executor()};
-        std::latch done(1);
-        native_pipeline_runner runner{
-            stream, kOps, done,
-            g_alloc_count.load(std::memory_order_relaxed),
-            std::chrono::steady_clock::now()};
-        runner.run_one();
-        done.wait();
+        auto ex = pool.get_executor();
+        sndr_read_stream stream{ex};
+        pool_scheduler sched{ex};
+        int count = kOps;
+        char buf[64];
+        auto before = g_alloc_count.load(
+            std::memory_order_relaxed);
+        auto start = std::chrono::steady_clock::now();
+        bex::sync_wait(bex::starts_on(sched,
+            repeat_effect_until(
+                bex::let_value(bex::just(), [&]() {
+                    return stream.read_some(
+                        capy::mutable_buffer(buf, sizeof(buf)));
+                }),
+                [&count]() { return --count == 0; })));
         pool.join();
-        grid[2][0][0] = runner.result_;
+        auto elapsed =
+            std::chrono::steady_clock::now() - start;
+        auto after = g_alloc_count.load(
+            std::memory_order_relaxed);
+        grid[2][0][0] = {
+            std::chrono::duration_cast<
+                std::chrono::microseconds>(elapsed).count(),
+            after - before};
     }
 
     // Abstract — sndr_io_read_stream
@@ -668,15 +436,29 @@ int main()
         sender_thread_pool pool(1);
         auto ex = pool.get_executor();
         sndr_io_read_stream_impl stream{ex};
-        std::latch done(1);
-        pipeline_runner<sndr_io_read_stream> runner{
-            stream, kOps, done,
-            g_alloc_count.load(std::memory_order_relaxed),
-            std::chrono::steady_clock::now()};
-        runner.run_one();
-        done.wait();
+        pool_scheduler sched{ex};
+        int count = kOps;
+        char buf[64];
+        auto before = g_alloc_count.load(
+            std::memory_order_relaxed);
+        auto start = std::chrono::steady_clock::now();
+        bex::sync_wait(bex::starts_on(sched,
+            repeat_effect_until(
+                bex::let_value(bex::just(), [&]() {
+                    return static_cast<sndr_io_read_stream&>(
+                        stream).read_some(
+                            capy::mutable_buffer(buf, sizeof(buf)));
+                }),
+                [&count]() { return --count == 0; })));
         pool.join();
-        grid[2][1][0] = runner.result_;
+        auto elapsed =
+            std::chrono::steady_clock::now() - start;
+        auto after = g_alloc_count.load(
+            std::memory_order_relaxed);
+        grid[2][1][0] = {
+            std::chrono::duration_cast<
+                std::chrono::microseconds>(elapsed).count(),
+            after - before};
     }
 
     // Type erased — sndr_any_read_stream
@@ -684,15 +466,28 @@ int main()
         sender_thread_pool pool(1);
         auto ex = pool.get_executor();
         sndr_any_read_stream stream(sndr_read_stream{ex});
-        std::latch done(1);
-        pipeline_runner<sndr_any_read_stream> runner{
-            stream, kOps, done,
-            g_alloc_count.load(std::memory_order_relaxed),
-            std::chrono::steady_clock::now()};
-        runner.run_one();
-        done.wait();
+        pool_scheduler sched{ex};
+        int count = kOps;
+        char buf[64];
+        auto before = g_alloc_count.load(
+            std::memory_order_relaxed);
+        auto start = std::chrono::steady_clock::now();
+        bex::sync_wait(bex::starts_on(sched,
+            repeat_effect_until(
+                bex::let_value(bex::just(), [&]() {
+                    return stream.read_some(
+                        capy::mutable_buffer(buf, sizeof(buf)));
+                }),
+                [&count]() { return --count == 0; })));
         pool.join();
-        grid[2][2][0] = runner.result_;
+        auto elapsed =
+            std::chrono::steady_clock::now() - start;
+        auto after = g_alloc_count.load(
+            std::memory_order_relaxed);
+        grid[2][2][0] = {
+            std::chrono::duration_cast<
+                std::chrono::microseconds>(elapsed).count(),
+            after - before};
     }
 
     // Col B: Awaitable (via as_sender bridge)
@@ -701,30 +496,59 @@ int main()
     {
         sender_thread_pool pool(1);
         ioaw_read_stream stream;
-        std::latch done(1);
-        ioaw_pipeline_runner<ioaw_read_stream> runner{
-            stream, pool.get_executor(), kOps, done,
-            g_alloc_count.load(std::memory_order_relaxed),
-            std::chrono::steady_clock::now()};
-        runner.run_one();
-        done.wait();
+        pool_scheduler sched{pool.get_executor()};
+        int count = kOps;
+        char buf[64];
+        auto before = g_alloc_count.load(
+            std::memory_order_relaxed);
+        auto start = std::chrono::steady_clock::now();
+        bex::sync_wait(bex::starts_on(sched,
+            repeat_effect_until(
+                bex::let_value(bex::just(), [&]() {
+                    return capy::as_sender(stream.read_some(
+                        capy::mutable_buffer(buf, sizeof(buf))));
+                }),
+                [&count]() { return --count == 0; })));
         pool.join();
-        grid[2][0][1] = runner.result_;
+        auto elapsed =
+            std::chrono::steady_clock::now() - start;
+        auto after = g_alloc_count.load(
+            std::memory_order_relaxed);
+        grid[2][0][1] = {
+            std::chrono::duration_cast<
+                std::chrono::microseconds>(elapsed).count(),
+            after - before};
     }
 
     // Abstract — ioaw_io_read_stream
     {
         sender_thread_pool pool(1);
         ioaw_io_read_stream_impl stream;
-        std::latch done(1);
-        ioaw_pipeline_runner<ioaw_io_read_stream> runner{
-            stream, pool.get_executor(), kOps, done,
-            g_alloc_count.load(std::memory_order_relaxed),
-            std::chrono::steady_clock::now()};
-        runner.run_one();
-        done.wait();
+        pool_scheduler sched{pool.get_executor()};
+        int count = kOps;
+        char buf[64];
+        auto before = g_alloc_count.load(
+            std::memory_order_relaxed);
+        auto start = std::chrono::steady_clock::now();
+        bex::sync_wait(bex::starts_on(sched,
+            repeat_effect_until(
+                bex::let_value(bex::just(), [&]() {
+                    return capy::as_sender(
+                        static_cast<ioaw_io_read_stream&>(
+                            stream).read_some(
+                                capy::mutable_buffer(
+                                    buf, sizeof(buf))));
+                }),
+                [&count]() { return --count == 0; })));
         pool.join();
-        grid[2][1][1] = runner.result_;
+        auto elapsed =
+            std::chrono::steady_clock::now() - start;
+        auto after = g_alloc_count.load(
+            std::memory_order_relaxed);
+        grid[2][1][1] = {
+            std::chrono::duration_cast<
+                std::chrono::microseconds>(elapsed).count(),
+            after - before};
     }
 
     // Type erased — capy::any_read_stream
@@ -732,15 +556,28 @@ int main()
         sender_thread_pool pool(1);
         ioaw_read_stream concrete;
         capy::any_read_stream stream(&concrete);
-        std::latch done(1);
-        ioaw_pipeline_runner<capy::any_read_stream> runner{
-            stream, pool.get_executor(), kOps, done,
-            g_alloc_count.load(std::memory_order_relaxed),
-            std::chrono::steady_clock::now()};
-        runner.run_one();
-        done.wait();
+        pool_scheduler sched{pool.get_executor()};
+        int count = kOps;
+        char buf[64];
+        auto before = g_alloc_count.load(
+            std::memory_order_relaxed);
+        auto start = std::chrono::steady_clock::now();
+        bex::sync_wait(bex::starts_on(sched,
+            repeat_effect_until(
+                bex::let_value(bex::just(), [&]() {
+                    return capy::as_sender(stream.read_some(
+                        capy::mutable_buffer(buf, sizeof(buf))));
+                }),
+                [&count]() { return --count == 0; })));
         pool.join();
-        grid[2][2][1] = runner.result_;
+        auto elapsed =
+            std::chrono::steady_clock::now() - start;
+        auto after = g_alloc_count.load(
+            std::memory_order_relaxed);
+        grid[2][2][1] = {
+            std::chrono::duration_cast<
+                std::chrono::microseconds>(elapsed).count(),
+            after - before};
     }
 
     // ---------------------------------------------------------------

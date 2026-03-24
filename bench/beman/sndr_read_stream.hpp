@@ -10,9 +10,11 @@
 //
 // No-op sender stream for benchmarks.
 //
-// Uses sender_executor directly. The sender provides both
-// as_awaitable (for coroutine consumption) and connect (for
-// sender pipeline consumption).
+// The stream holds a sender_executor (I/O context handle),
+// analogous to how a socket holds a reference to io_context.
+// read_some() returns a sender that captures this handle.
+// The sender provides both as_awaitable (for coroutine
+// consumption) and connect (for sender pipeline consumption).
 //
 
 #ifndef BOOST_CAPY_BENCH_SNDR_READ_STREAM_HPP
