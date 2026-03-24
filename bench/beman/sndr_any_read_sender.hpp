@@ -142,6 +142,59 @@ public:
             callback_receiver{data, on_value, on_stopped});
     }
 
+    /// Standard connect for ex::connect CPO. Defers the factory
+    /// call to start() so the callback points to the final address.
+    template <ex::receiver Receiver>
+    struct bridge_op
+    {
+        using operation_state_concept = ex::operation_state_t;
+
+        std::remove_cvref_t<Receiver> rcvr_;
+        factory_fn factory_;
+        destroy_fn destroy_;
+        alignas(std::max_align_t) char sbuf_[buf_size];
+        std::unique_ptr<op_base> inner_;
+
+        bridge_op(Receiver rcvr, sndr_any_read_sender&& sndr)
+            : rcvr_(std::move(rcvr))
+            , factory_(sndr.factory_)
+            , destroy_(sndr.destroy_)
+        {
+            std::memcpy(sbuf_, sndr.buf_, buf_size);
+            sndr.destroy_ = +[](void*) noexcept {};
+        }
+
+        ~bridge_op() { destroy_(sbuf_); }
+
+        bridge_op(bridge_op const&) = delete;
+        bridge_op(bridge_op&&) = delete;
+        bridge_op& operator=(bridge_op const&) = delete;
+        bridge_op& operator=(bridge_op&&) = delete;
+
+        void start() & noexcept
+        {
+            inner_ = factory_(sbuf_, callback_receiver{
+                this,
+                +[](void* p, std::size_t n) noexcept {
+                    auto* self = static_cast<bridge_op*>(p);
+                    ex::set_value(std::move(self->rcvr_), n);
+                },
+                +[](void* p) noexcept {
+                    auto* self = static_cast<bridge_op*>(p);
+                    ex::set_stopped(std::move(self->rcvr_));
+                }
+            });
+            inner_->start();
+        }
+    };
+
+    template <ex::receiver Receiver>
+    auto connect(Receiver&& rcvr) &&
+        -> bridge_op<std::remove_cvref_t<Receiver>>
+    {
+        return {std::forward<Receiver>(rcvr), std::move(*this)};
+    }
+
     template <typename Promise>
     auto as_awaitable(Promise&)
     {

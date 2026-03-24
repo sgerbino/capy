@@ -20,6 +20,9 @@
 
 #include "sender_thread_pool.hpp"
 
+#include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/execution_context.hpp>
+
 #include <beman/execution/execution.hpp>
 #include <beman/task/task.hpp>
 
@@ -27,6 +30,56 @@
 #include <memory_resource>
 #include <type_traits>
 #include <utility>
+
+// Minimal execution_context for running capy::task on
+// sender_thread_pool. Provides the frame allocator that
+// capy::run_async needs.
+struct bench_context : boost::capy::execution_context
+{
+    bench_context() : execution_context(this) {}
+    ~bench_context() { shutdown(); destroy(); }
+};
+
+// Adapter making sender_executor satisfy capy's Executor
+// concept so capy::task can run on sender_thread_pool.
+struct sender_as_capy_executor
+{
+    sender_executor ex_;
+    bench_context* ctx_;
+
+    boost::capy::execution_context& context() const noexcept
+    {
+        return *ctx_;
+    }
+
+    void on_work_started() const noexcept
+    {
+        ex_.pool_->on_work_started();
+    }
+
+    void on_work_finished() const noexcept
+    {
+        ex_.pool_->on_work_finished();
+    }
+
+    void post(boost::capy::continuation& c) const
+    {
+        ex_.post(c.h);
+    }
+
+    // Return the handle for symmetric transfer so the
+    // caller resumes the coroutine inline. Posting would
+    // cause a lifetime issue since run_async expects to
+    // hand off ownership via symmetric transfer.
+    std::coroutine_handle<>
+    dispatch(boost::capy::continuation& c) const
+    {
+        return c.h;
+    }
+
+    bool operator==(
+        sender_as_capy_executor const&) const noexcept = default;
+};
 
 namespace ex = beman::execution;
 
