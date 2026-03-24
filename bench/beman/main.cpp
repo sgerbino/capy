@@ -70,7 +70,7 @@ static constexpr int kInner = 10'000;
 // ===================================================================
 
 template <class Stream>
-capy::task<> session(Stream& stream)
+capy::task<> capy_session(Stream& stream)
 {
     char buf[64];
     for (int i = 0; i < kInner; ++i)
@@ -79,13 +79,13 @@ capy::task<> session(Stream& stream)
 }
 
 template <class Stream>
-capy::task<> accept(Stream& stream, cell_result& out)
+capy::task<> capy_accept(Stream& stream, cell_result& out)
 {
     auto before = g_alloc_count.load(std::memory_order_relaxed);
     auto start = std::chrono::steady_clock::now();
 
     for (int i = 0; i < kOuter; ++i)
-        co_await session(stream);
+        co_await capy_session(stream);
 
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto after = g_alloc_count.load(std::memory_order_relaxed);
@@ -104,7 +104,7 @@ capy::task<> accept(Stream& stream, cell_result& out)
 // ===================================================================
 
 template <class Stream>
-capy::task<> session_sndr(Stream& stream)
+capy::task<> capy_session_sndr(Stream& stream)
 {
     char buf[64];
     for (int i = 0; i < kInner; ++i)
@@ -114,13 +114,13 @@ capy::task<> session_sndr(Stream& stream)
 }
 
 template <class Stream>
-capy::task<> accept_sndr(Stream& stream, cell_result& out)
+capy::task<> capy_accept_sndr(Stream& stream, cell_result& out)
 {
     auto before = g_alloc_count.load(std::memory_order_relaxed);
     auto start = std::chrono::steady_clock::now();
 
     for (int i = 0; i < kOuter; ++i)
-        co_await session_sndr(stream);
+        co_await capy_session_sndr(stream);
 
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto after = g_alloc_count.load(std::memory_order_relaxed);
@@ -137,7 +137,7 @@ capy::task<> accept_sndr(Stream& stream, cell_result& out)
 // ===================================================================
 
 template <class Stream>
-auto sndr_session(
+auto bex_session(
     Stream& stream,
     std::allocator_arg_t,
     std::pmr::polymorphic_allocator<std::byte>) -> bex::task<void, io_env>
@@ -149,7 +149,7 @@ auto sndr_session(
 }
 
 template <class Stream>
-auto sndr_accept(
+auto bex_accept(
     sender_thread_pool* pool,
     Stream& stream,
     cell_result& out,
@@ -160,7 +160,7 @@ auto sndr_accept(
     auto start = std::chrono::steady_clock::now();
 
     for (int i = 0; i < kOuter; ++i)
-        co_await sndr_session(stream, std::allocator_arg, alloc);
+        co_await bex_session(stream, std::allocator_arg, alloc);
 
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto after = g_alloc_count.load(std::memory_order_relaxed);
@@ -177,7 +177,7 @@ auto sndr_accept(
 // ===================================================================
 
 template <class Stream>
-auto sndr_session_ioaw(
+auto bex_session_ioaw(
     Stream& stream,
     std::allocator_arg_t,
     std::pmr::polymorphic_allocator<std::byte>) -> bex::task<void, io_env>
@@ -190,7 +190,7 @@ auto sndr_session_ioaw(
 }
 
 template <class Stream>
-auto sndr_accept_ioaw(
+auto bex_accept_ioaw(
     sender_thread_pool* pool,
     Stream& stream,
     cell_result& out,
@@ -201,7 +201,7 @@ auto sndr_accept_ioaw(
     auto start = std::chrono::steady_clock::now();
 
     for (int i = 0; i < kOuter; ++i)
-        co_await sndr_session_ioaw(stream, std::allocator_arg, alloc);
+        co_await bex_session_ioaw(stream, std::allocator_arg, alloc);
 
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto after = g_alloc_count.load(std::memory_order_relaxed);
@@ -231,7 +231,7 @@ int main()
         capy::thread_pool pool(1);
         ioaw_read_stream stream;
         capy::run_async(pool.get_executor())(
-            accept(stream, grid[0][0][0]));
+            capy_accept(stream, grid[0][0][0]));
         pool.join();
     }
 
@@ -240,7 +240,7 @@ int main()
         capy::thread_pool pool(1);
         ioaw_io_read_stream_impl stream;
         capy::run_async(pool.get_executor())(
-            accept(static_cast<ioaw_io_read_stream&>(stream),
+            capy_accept(static_cast<ioaw_io_read_stream&>(stream),
                 grid[0][1][0]));
         pool.join();
     }
@@ -251,7 +251,7 @@ int main()
         ioaw_read_stream concrete;
         capy::any_read_stream stream(&concrete);
         capy::run_async(pool.get_executor())(
-            accept(stream, grid[0][2][0]));
+            capy_accept(stream, grid[0][2][0]));
         pool.join();
     }
 
@@ -265,7 +265,7 @@ int main()
         sender_as_capy_executor adapter{ex, &ctx};
         sndr_read_stream stream{ex};
         capy::run_async(adapter)(
-            accept_sndr(stream, grid[0][0][1]));
+            capy_accept_sndr(stream, grid[0][0][1]));
         pool.join();
     }
 
@@ -277,7 +277,7 @@ int main()
         sender_as_capy_executor adapter{ex, &ctx};
         sndr_io_read_stream_impl stream{ex};
         capy::run_async(adapter)(
-            accept_sndr(
+            capy_accept_sndr(
                 static_cast<sndr_io_read_stream&>(stream),
                 grid[0][1][1]));
         pool.join();
@@ -291,7 +291,7 @@ int main()
         sender_as_capy_executor adapter{ex, &ctx};
         sndr_any_read_stream stream(sndr_read_stream{ex});
         capy::run_async(adapter)(
-            accept_sndr(stream, grid[0][2][1]));
+            capy_accept_sndr(stream, grid[0][2][1]));
         pool.join();
     }
 
@@ -307,7 +307,7 @@ int main()
         pool_scheduler sched{ex};
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
-            sndr_accept(
+            bex_accept(
                 &pool, stream, grid[1][0][0],
                 std::allocator_arg,
                 std::pmr::polymorphic_allocator<std::byte>(mr))));
@@ -322,7 +322,7 @@ int main()
         pool_scheduler sched{ex};
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
-            sndr_accept(
+            bex_accept(
                 &pool,
                 static_cast<sndr_io_read_stream&>(stream),
                 grid[1][1][0],
@@ -339,7 +339,7 @@ int main()
         pool_scheduler sched{ex};
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
-            sndr_accept(
+            bex_accept(
                 &pool, stream, grid[1][2][0],
                 std::allocator_arg,
                 std::pmr::polymorphic_allocator<std::byte>(mr))));
@@ -356,7 +356,7 @@ int main()
         pool_scheduler sched{ex};
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
-            sndr_accept_ioaw(
+            bex_accept_ioaw(
                 &pool, stream, grid[1][0][1],
                 std::allocator_arg,
                 std::pmr::polymorphic_allocator<std::byte>(mr))));
@@ -371,7 +371,7 @@ int main()
         pool_scheduler sched{ex};
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
-            sndr_accept_ioaw(
+            bex_accept_ioaw(
                 &pool,
                 static_cast<ioaw_io_read_stream&>(stream),
                 grid[1][1][1],
@@ -389,7 +389,7 @@ int main()
         pool_scheduler sched{ex};
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
-            sndr_accept_ioaw(
+            bex_accept_ioaw(
                 &pool, stream, grid[1][2][1],
                 std::allocator_arg,
                 std::pmr::polymorphic_allocator<std::byte>(mr))));
