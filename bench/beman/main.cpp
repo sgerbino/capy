@@ -53,13 +53,14 @@ namespace capy = boost::capy;
 
 struct cell_result
 {
-    long long us = 0;
+    long long ns = 0;
     int64_t allocs = 0;
 };
 
 static constexpr int kOps = 100'000'000;
 static constexpr int kOuter = 10'000;
 static constexpr int kInner = 10'000;
+
 
 // ===================================================================
 // Table 1: capy::task
@@ -90,7 +91,7 @@ capy::task<> capy_accept(Stream& stream, cell_result& out)
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto after = g_alloc_count.load(std::memory_order_relaxed);
     out = {std::chrono::duration_cast<
-        std::chrono::microseconds>(elapsed).count(),
+        std::chrono::nanoseconds>(elapsed).count(),
         after - before};
 }
 
@@ -125,7 +126,7 @@ capy::task<> capy_accept_sndr(Stream& stream, cell_result& out)
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto after = g_alloc_count.load(std::memory_order_relaxed);
     out = {std::chrono::duration_cast<
-        std::chrono::microseconds>(elapsed).count(),
+        std::chrono::nanoseconds>(elapsed).count(),
         after - before};
 }
 
@@ -150,7 +151,6 @@ auto bex_session(
 
 template <class Stream>
 auto bex_accept(
-    sender_thread_pool* pool,
     Stream& stream,
     cell_result& out,
     std::allocator_arg_t,
@@ -165,7 +165,7 @@ auto bex_accept(
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto after = g_alloc_count.load(std::memory_order_relaxed);
     out = {std::chrono::duration_cast<
-        std::chrono::microseconds>(elapsed).count(),
+        std::chrono::nanoseconds>(elapsed).count(),
         after - before};
 }
 
@@ -191,7 +191,6 @@ auto bex_session_ioaw(
 
 template <class Stream>
 auto bex_accept_ioaw(
-    sender_thread_pool* pool,
     Stream& stream,
     cell_result& out,
     std::allocator_arg_t,
@@ -206,7 +205,7 @@ auto bex_accept_ioaw(
     auto elapsed = std::chrono::steady_clock::now() - start;
     auto after = g_alloc_count.load(std::memory_order_relaxed);
     out = {std::chrono::duration_cast<
-        std::chrono::microseconds>(elapsed).count(),
+        std::chrono::nanoseconds>(elapsed).count(),
         after - before};
 }
 
@@ -308,7 +307,7 @@ int main()
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
             bex_accept(
-                &pool, stream, grid[1][0][0],
+                stream, grid[1][0][0],
                 std::allocator_arg,
                 std::pmr::polymorphic_allocator<std::byte>(mr))));
         pool.join();
@@ -323,7 +322,6 @@ int main()
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
             bex_accept(
-                &pool,
                 static_cast<sndr_io_read_stream&>(stream),
                 grid[1][1][0],
                 std::allocator_arg,
@@ -340,7 +338,7 @@ int main()
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
             bex_accept(
-                &pool, stream, grid[1][2][0],
+                stream, grid[1][2][0],
                 std::allocator_arg,
                 std::pmr::polymorphic_allocator<std::byte>(mr))));
         pool.join();
@@ -357,7 +355,7 @@ int main()
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
             bex_accept_ioaw(
-                &pool, stream, grid[1][0][1],
+                stream, grid[1][0][1],
                 std::allocator_arg,
                 std::pmr::polymorphic_allocator<std::byte>(mr))));
         pool.join();
@@ -372,7 +370,6 @@ int main()
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
             bex_accept_ioaw(
-                &pool,
                 static_cast<ioaw_io_read_stream&>(stream),
                 grid[1][1][1],
                 std::allocator_arg,
@@ -390,7 +387,7 @@ int main()
         auto* mr = capy::get_recycling_memory_resource();
         bex::sync_wait(bex::starts_on(sched,
             bex_accept_ioaw(
-                &pool, stream, grid[1][2][1],
+                stream, grid[1][2][1],
                 std::allocator_arg,
                 std::pmr::polymorphic_allocator<std::byte>(mr))));
         pool.join();
@@ -427,7 +424,7 @@ int main()
             std::memory_order_relaxed);
         grid[2][0][0] = {
             std::chrono::duration_cast<
-                std::chrono::microseconds>(elapsed).count(),
+                std::chrono::nanoseconds>(elapsed).count(),
             after - before};
     }
 
@@ -457,7 +454,7 @@ int main()
             std::memory_order_relaxed);
         grid[2][1][0] = {
             std::chrono::duration_cast<
-                std::chrono::microseconds>(elapsed).count(),
+                std::chrono::nanoseconds>(elapsed).count(),
             after - before};
     }
 
@@ -486,7 +483,7 @@ int main()
             std::memory_order_relaxed);
         grid[2][2][0] = {
             std::chrono::duration_cast<
-                std::chrono::microseconds>(elapsed).count(),
+                std::chrono::nanoseconds>(elapsed).count(),
             after - before};
     }
 
@@ -516,7 +513,7 @@ int main()
             std::memory_order_relaxed);
         grid[2][0][1] = {
             std::chrono::duration_cast<
-                std::chrono::microseconds>(elapsed).count(),
+                std::chrono::nanoseconds>(elapsed).count(),
             after - before};
     }
 
@@ -547,7 +544,7 @@ int main()
             std::memory_order_relaxed);
         grid[2][1][1] = {
             std::chrono::duration_cast<
-                std::chrono::microseconds>(elapsed).count(),
+                std::chrono::nanoseconds>(elapsed).count(),
             after - before};
     }
 
@@ -576,7 +573,7 @@ int main()
             std::memory_order_relaxed);
         grid[2][2][1] = {
             std::chrono::duration_cast<
-                std::chrono::microseconds>(elapsed).count(),
+                std::chrono::nanoseconds>(elapsed).count(),
             after - before};
     }
 
@@ -635,9 +632,9 @@ int main()
                     "  %-24s  %6.1f ns/op  %3.0f al/op"
                     "    %6.1f ns/op  %3.0f al/op\n",
                     labels[s],
-                    static_cast<double>(a.us) * 1000.0 / ops,
+                    static_cast<double>(a.ns) / ops,
                     alloc_per_op(a.allocs),
-                    static_cast<double>(b.us) * 1000.0 / ops,
+                    static_cast<double>(b.ns) / ops,
                     alloc_per_op(b.allocs));
             }
             else
@@ -645,7 +642,7 @@ int main()
                 std::printf(
                     "  %-24s  %6.1f ns/op  %3.0f al/op\n",
                     labels[s],
-                    static_cast<double>(a.us) * 1000.0 / ops,
+                    static_cast<double>(a.ns) / ops,
                     alloc_per_op(a.allocs));
             }
         }
