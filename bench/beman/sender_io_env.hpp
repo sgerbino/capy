@@ -141,7 +141,4 @@ struct io_env
     {}
 };
 
-template <typename T = void>
-using io_task = ex::task<T, io_env>;
-
 #endif
