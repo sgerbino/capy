@@ -78,6 +78,44 @@ static constexpr int SYNC_STREAM         = 3;
 static constexpr int NATIVE_EXEC_MODEL = 0;
 static constexpr int BRIDGED_EXEC_MODEL = 1;
 
+// Minimal receiver for inline connect/start of
+// synchronous senders in the trampoline loop.
+// Col A (native sender) needs no env.
+// Col B (as_sender bridge) needs scheduler env.
+struct inline_receiver
+{
+    using receiver_concept = bex::receiver_t;
+    void set_value(std::size_t) && noexcept {}
+    template <class E>
+    void set_error(E&&) && noexcept {}
+    void set_stopped() && noexcept {}
+};
+
+struct inline_receiver_with_env
+{
+    using receiver_concept = bex::receiver_t;
+    pool_scheduler sched_;
+    void set_value(std::size_t) && noexcept {}
+    template <class E>
+    void set_error(E&&) && noexcept {}
+    void set_stopped() && noexcept {}
+
+    struct env
+    {
+        pool_scheduler sched_;
+        auto query(
+            bex::get_scheduler_t const&)
+                const noexcept
+        {
+            return sched_;
+        }
+    };
+
+    env get_env() const noexcept
+    {
+        return {sched_};
+    }
+};
 
 // ===================================================================
 // Table 1: capy::task
@@ -421,11 +459,86 @@ int main()
             after - before};
     }
 
-    // Synchronous — sender pipeline cannot run synchronous
-    // senders. repeat_effect_until requires a trampoline for
-    // synchronous completions, and the trampoline interacts
-    // poorly with the let_value/starts_on sender layering.
-    // Table 1 SYNC_STREAM cells are left at zero.
+    // Synchronous — Col A: sndr_sync_read_stream
+    // Uses a manual trampoline loop since repeat_effect_until
+    // stack overflows on synchronous completions.
+    {
+        sender_thread_pool pool(1);
+        sndr_sync_read_stream stream;
+        auto sched = pool.get_scheduler();
+        char buf[64];
+
+        // Manual trampoline: the sender pipeline cannot loop
+        // synchronous senders safely, so we implement the loop
+        // at the call site. This is the minimum a user would
+        // need to write.
+        int count = OPS_PER_CELL;
+        auto before = g_alloc_count.load(
+            std::memory_order_relaxed);
+        auto start = std::chrono::steady_clock::now();
+        bex::sync_wait(bex::starts_on(sched,
+            bex::just() | bex::then([&] {
+                while (count-- > 0)
+                {
+                    // Can't co_await — this is a sender
+                    // pipeline. Must connect/start inline
+                    // and handle completion manually.
+                    auto sndr = stream.read_some(
+                        capy::mutable_buffer(
+                            buf, sizeof(buf)));
+                    auto op = bex::connect(
+                        std::move(sndr),
+                        inline_receiver{});
+                    bex::start(op);
+                }
+            })));
+        pool.join();
+        auto elapsed =
+            std::chrono::steady_clock::now() - start;
+        auto after = g_alloc_count.load(
+            std::memory_order_relaxed);
+        grid[run][SENDER_RECEIVER][SYNC_STREAM][NATIVE_EXEC_MODEL] = {
+            std::chrono::duration_cast<
+                std::chrono::nanoseconds>(elapsed).count(),
+            after - before};
+    }
+
+    // Synchronous — Col B: ioaw_sync_read_stream via as_sender
+    // Same manual trampoline approach.
+    {
+        sender_thread_pool pool(1);
+        ioaw_sync_read_stream stream;
+        auto sched = pool.get_scheduler();
+        char buf[64];
+        int count = OPS_PER_CELL;
+        auto before = g_alloc_count.load(
+            std::memory_order_relaxed);
+        auto start = std::chrono::steady_clock::now();
+        bex::sync_wait(bex::starts_on(sched,
+            bex::just() | bex::then([&] {
+                while (count-- > 0)
+                {
+                    auto sndr = capy::as_sender(
+                        stream.read_some(
+                            capy::mutable_buffer(
+                                buf, sizeof(buf))));
+                    auto op = bex::connect(
+                        std::move(sndr),
+                        inline_receiver_with_env{
+                            sched});
+                    bex::start(op);
+                }
+            })));
+        pool.join();
+        auto elapsed =
+            std::chrono::steady_clock::now() - start;
+        auto after = g_alloc_count.load(
+            std::memory_order_relaxed);
+        grid[run][SENDER_RECEIVER][SYNC_STREAM][BRIDGED_EXEC_MODEL] = {
+            std::chrono::duration_cast<
+                std::chrono::nanoseconds>(elapsed).count(),
+            after - before};
+    }
 
     // ---------------------------------------------------------------
     // Table 2: capy::task (capy::thread_pool)
@@ -668,18 +781,6 @@ int main()
 
         for (int s = 0; s < NUM_STREAMS; ++s)
         {
-            if (s == SYNC_STREAM &&
-                table == SENDER_RECEIVER)
-            {
-                std::printf(
-                    "  %-18s"
-                    "  %-30s  %-30s\n",
-                    row_labels[s],
-                    "              N/A",
-                    "              N/A");
-                continue;
-            }
-
             double sum[NUM_COLUMNS]{};
             double sum2[NUM_COLUMNS]{};
             double al[NUM_COLUMNS]{};
