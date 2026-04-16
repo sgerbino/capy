@@ -74,6 +74,25 @@ public:
     static void
     post(strand_impl& impl, executor_ref ex, std::coroutine_handle<> h);
 
+    /** Release strand state and dispatch a continuation onto another executor.
+
+        Clears the strand's `dispatch_thread_` marker and either
+        unlocks the strand (if pending is empty) or posts a fresh
+        invoker for the remaining work so other handlers can run on
+        the inner executor. Then dispatches `c` onto `target`.
+
+        Called when a coroutine running on this strand suspends to
+        wait on work happening on a different executor.
+
+        @return The handle returned by `target.dispatch(c)`.
+    */
+    static std::coroutine_handle<>
+    transfer_to(
+        strand_impl& impl,
+        executor_ref inner_ex,
+        executor_ref const& target,
+        continuation& c);
+
 protected:
     strand_service();
 };

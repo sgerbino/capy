@@ -89,6 +89,12 @@ struct sync_executor
     {
         c.h.resume();
     }
+
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return target.dispatch(c);
+    }
 };
 
 test_io_context sync_executor::default_ctx_;
@@ -129,6 +135,12 @@ struct queue_executor
     void post(continuation& c) const
     {
         queue_->push(c.h);
+    }
+
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return target.dispatch(c);
     }
 };
 

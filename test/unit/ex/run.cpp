@@ -21,9 +21,12 @@
 
 #include <boost/capy/ex/strand.hpp>
 #include <boost/capy/ex/thread_pool.hpp>
+#include <boost/capy/ex/frame_allocator.hpp>
 
 #include <latch>
 #include <memory>
+#include <queue>
+#include <thread>
 
 namespace boost {
 namespace capy {
@@ -56,6 +59,105 @@ struct test_allocator
         std::allocator<T>{}.deallocate(p, n);
     }
 };
+
+// Single-threaded run loop whose dispatch resumes inline when
+// invoked on the loop's owner thread, and whose post always
+// queues. Used to reproduce the strand-escape failure mode
+// against an executor that distinguishes the two verbs.
+class inline_dispatch_executor : public execution_context
+{
+    std::queue<std::coroutine_handle<>> q_;
+    std::thread::id owner_{};
+
+public:
+    class executor_type;
+
+    inline_dispatch_executor()
+        : execution_context(this)
+    {
+    }
+
+    ~inline_dispatch_executor()
+    {
+        shutdown();
+        destroy();
+    }
+
+    inline_dispatch_executor(inline_dispatch_executor const&) = delete;
+    inline_dispatch_executor& operator=(inline_dispatch_executor const&) = delete;
+
+    executor_type get_executor() noexcept;
+
+    bool on_owner_thread() const noexcept
+    {
+        return std::this_thread::get_id() == owner_;
+    }
+
+    void enqueue(std::coroutine_handle<> h)
+    {
+        q_.push(h);
+    }
+
+    void run()
+    {
+        owner_ = std::this_thread::get_id();
+        while(! q_.empty())
+        {
+            auto h = q_.front();
+            q_.pop();
+            safe_resume(h);
+        }
+    }
+};
+
+class inline_dispatch_executor::executor_type
+{
+    inline_dispatch_executor* loop_ = nullptr;
+
+public:
+    executor_type() = default;
+
+    explicit executor_type(inline_dispatch_executor& loop) noexcept
+        : loop_(&loop)
+    {
+    }
+
+    execution_context& context() const noexcept { return *loop_; }
+    void on_work_started() const noexcept {}
+    void on_work_finished() const noexcept {}
+
+    std::coroutine_handle<> dispatch(continuation& c) const
+    {
+        if(loop_->on_owner_thread())
+            return c.h;
+        loop_->enqueue(c.h);
+        return std::noop_coroutine();
+    }
+
+    void post(continuation& c) const
+    {
+        loop_->enqueue(c.h);
+    }
+
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return target.dispatch(c);
+    }
+
+    bool operator==(executor_type const& o) const noexcept
+    {
+        return loop_ == o.loop_;
+    }
+};
+
+inline inline_dispatch_executor::executor_type
+inline_dispatch_executor::get_executor() noexcept
+{
+    return executor_type{*this};
+}
+
+static_assert(Executor<inline_dispatch_executor::executor_type>);
 
 //----------------------------------------------------------
 // run Tests
@@ -501,6 +603,29 @@ struct run_test
     }
 
     void
+    testRunExReturnEscapesStrand()
+    {
+        // Verify the caller's ability to escape the strand after
+        // invocation of run(strand)(task).
+        inline_dispatch_executor loop;
+        auto ex = loop.get_executor();
+        strand s(ex);
+        bool inside_strand_after_run = true;
+
+        auto inner = []() -> task<void> { co_return; };
+
+        auto outer = [&]() -> task<void> {
+            co_await capy::run(s)(inner());
+            inside_strand_after_run = s.running_in_this_thread();
+        };
+
+        run_async(ex, []() {})(outer());
+        loop.run();
+
+        BOOST_TEST(! inside_strand_after_run);
+    }
+
+    void
     run()
     {
         testCustomTaskType();
@@ -523,6 +648,7 @@ struct run_test
         testAllocatorPropagation();
         testAllocatorPropagationThroughRun();
         testRunExStrandFirstInstruction();
+        testRunExReturnEscapesStrand();
     }
 };
 

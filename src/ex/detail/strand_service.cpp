@@ -261,6 +261,25 @@ post(strand_impl& impl, executor_ref ex, std::coroutine_handle<> h)
         strand_service_impl::post_invoker(impl, ex);
 }
 
+std::coroutine_handle<>
+strand_service::
+transfer_to(
+    strand_impl& /*impl*/,
+    executor_ref /*inner_ex*/,
+    executor_ref const& target,
+    continuation& c)
+{
+    // Posting (instead of dispatching) breaks the symmetric
+    // transfer chain at the strand boundary. Control returns to
+    // the strand_invoker's safe_resume call, which lets the
+    // invoker loop drain remaining work and release through its
+    // normal path. The strand state (dispatch_thread_, locked_)
+    // is intentionally untouched here; the invoker loop is the
+    // only safe place to mutate it.
+    target.post(c);
+    return std::noop_coroutine();
+}
+
 strand_service&
 get_strand_service(execution_context& ctx)
 {

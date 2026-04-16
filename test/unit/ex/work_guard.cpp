@@ -73,6 +73,12 @@ struct guard_test_executor
     post(continuation&) const
     {
     }
+
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return target.dispatch(c);
+    }
 };
 
 // Verify Executor concept

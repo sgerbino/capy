@@ -12,6 +12,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/executor_ref.hpp>
 #include <concepts>
 #include <coroutine>
 #include <memory>
@@ -94,6 +95,8 @@ class any_executor
         virtual void on_work_finished() const noexcept = 0;
         virtual std::coroutine_handle<> dispatch(continuation&) const = 0;
         virtual void post(continuation&) const = 0;
+        virtual std::coroutine_handle<> transfer_to(
+            executor_ref const&, continuation&) const = 0;
         virtual bool equals(impl_base const*) const noexcept = 0;
         virtual std::type_info const& target_type() const noexcept = 0;
     };
@@ -132,6 +135,12 @@ class any_executor
         void post(continuation& c) const override
         {
             ex_.post(c);
+        }
+
+        std::coroutine_handle<>
+        transfer_to(executor_ref const& target, continuation& c) const override
+        {
+            return ex_.transfer_to(target, c);
         }
 
         bool equals(impl_base const* other) const noexcept override
@@ -274,6 +283,20 @@ public:
     void post(continuation& c) const
     {
         p_->post(c);
+    }
+
+    /** Transfer `c` from this executor to `target`.
+
+        Forwards to the wrapped executor's `transfer_to`.
+
+        @return The handle for symmetric transfer.
+
+        @pre This instance holds a valid executor.
+    */
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return p_->transfer_to(target, c);
     }
 
     /** Compares two executor wrappers for equality.

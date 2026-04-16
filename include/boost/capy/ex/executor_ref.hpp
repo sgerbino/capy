@@ -22,6 +22,7 @@ namespace boost {
 namespace capy {
 
 class execution_context;
+class executor_ref;
 
 namespace detail {
 
@@ -33,6 +34,8 @@ struct executor_vtable
     void (*on_work_finished)(void const*) noexcept;
     void (*post)(void const*, continuation&);
     std::coroutine_handle<> (*dispatch)(void const*, continuation&);
+    std::coroutine_handle<> (*transfer_to)(
+        void const*, executor_ref const&, continuation&);
     bool (*equals)(void const*, void const*) noexcept;
     detail::type_info const* type_id;
 };
@@ -59,6 +62,11 @@ inline constexpr executor_vtable vtable_for = {
     // dispatch
     [](void const* p, continuation& c) -> std::coroutine_handle<> {
         return static_cast<Ex const*>(p)->dispatch(c);
+    },
+    // transfer_to
+    [](void const* p, executor_ref const& target, continuation& c)
+        -> std::coroutine_handle<> {
+        return static_cast<Ex const*>(p)->transfer_to(target, c);
     },
     // equals
     [](void const* a, void const* b) noexcept -> bool {
@@ -232,6 +240,22 @@ public:
     void post(continuation& c) const
     {
         vt_->post(ex_, c);
+    }
+
+    /** Transfers `c` from this executor to `target`.
+
+        Forwards through the vtable to the wrapped executor's
+        `transfer_to`. The wrapped executor is responsible for any
+        cleanup it needs before handing control to `target`.
+
+        @return The handle returned by `target.dispatch(c)`.
+
+        @pre This instance was constructed with a valid executor.
+    */
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return vt_->transfer_to(ex_, target, c);
     }
 
     /** Compares two executor references for equality.

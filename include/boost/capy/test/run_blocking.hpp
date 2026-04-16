@@ -95,6 +95,17 @@ struct BOOST_CAPY_DECL blocking_executor
     void
     post(continuation& c) const;
 
+    /** Transfer `c` from this executor to `target`.
+
+        Forwards directly to `target.dispatch(c)`; this executor has
+        no serialization state to release.
+    */
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return target.dispatch(c);
+    }
+
 private:
     blocking_context* ctx_;
 };

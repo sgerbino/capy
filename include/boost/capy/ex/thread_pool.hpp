@@ -225,6 +225,17 @@ public:
     void
     post(continuation& c) const;
 
+    /** Transfer `c` from this executor to `target`.
+
+        The thread pool has no serialization state to release; this
+        forwards directly to `target.dispatch(c)`.
+    */
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return target.dispatch(c);
+    }
+
     /// Return true if two executors refer to the same thread pool.
     bool
     operator==(executor_type const& other) const noexcept

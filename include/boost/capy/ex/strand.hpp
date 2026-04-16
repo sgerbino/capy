@@ -243,6 +243,23 @@ public:
     {
         return detail::strand_service::dispatch(*impl_, executor_ref(ex_), c.h);
     }
+
+    /** Transfer `c` from this strand to `target`.
+
+        Releases the strand's serialization marker, schedules a
+        fresh invoker for any pending handlers (so other strand
+        work can progress on the inner executor), then dispatches
+        `c` onto `target`.
+
+        @return The handle returned by `target.dispatch(c)`, suitable
+            for symmetric transfer.
+    */
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return detail::strand_service::transfer_to(
+            *impl_, executor_ref(ex_), target, c);
+    }
 };
 
 // Deduction guide

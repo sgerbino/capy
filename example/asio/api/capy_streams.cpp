@@ -251,6 +251,13 @@ public:
         auto h = c.h;
         net::post(ex_, [h]{ h.resume(); });
     }
+
+    std::coroutine_handle<>
+    transfer_to(boost::capy::executor_ref const& target,
+                continuation& c) const
+    {
+        return target.dispatch(c);
+    }
 };
 
 //----------------------------------------------------------

@@ -87,6 +87,12 @@ struct tracking_executor
     {
         c.h.resume();
     }
+
+    std::coroutine_handle<>
+    transfer_to(executor_ref const& target, continuation& c) const
+    {
+        return target.dispatch(c);
+    }
 };
 
 static_assert(Executor<tracking_executor>);

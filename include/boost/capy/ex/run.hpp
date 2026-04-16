@@ -76,6 +76,7 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE dispatch_trampoline
         : frame_alloc_mixin
     {
         executor_ref caller_ex_;
+        executor_ref target_ex_;
         continuation parent_;
 
         dispatch_trampoline get_return_object() noexcept
@@ -97,7 +98,8 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE dispatch_trampoline
                     std::coroutine_handle<>) noexcept
                 {
                     return detail::symmetric_transfer(
-                        p_->caller_ex_.dispatch(p_->parent_));
+                        p_->target_ex_.transfer_to(
+                            p_->caller_ex_, p_->parent_));
                 }
 
                 void await_resume() const noexcept {}
@@ -226,6 +228,7 @@ struct [[nodiscard]] run_awaitable_ex
     {
         tr_ = make_dispatch_trampoline();
         tr_.h_.promise().caller_ex_ = caller_env->executor;
+        tr_.h_.promise().target_ex_ = executor_ref(ex_);
         tr_.h_.promise().parent_.h = cont;
 
         auto h = inner_.handle();
@@ -245,7 +248,7 @@ struct [[nodiscard]] run_awaitable_ex
 
         p.set_environment(&env_);
         task_cont_.h = h;
-        return ex_.dispatch(task_cont_);
+        return caller_env->executor.transfer_to(ex_, task_cont_);
     }
 
     // Non-copyable

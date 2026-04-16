@@ -109,6 +109,13 @@ public:
         loop_->enqueue(c.h);
     }
 
+    std::coroutine_handle<>
+    transfer_to(capy::executor_ref const& target,
+                capy::continuation& c) const
+    {
+        return target.dispatch(c);
+    }
+
     bool operator==(executor_type const& other) const noexcept
     {
         return loop_ == other.loop_;

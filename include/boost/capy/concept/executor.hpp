@@ -12,6 +12,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/executor_ref.hpp>
 
 #include <concepts>
 #include <coroutine>
@@ -178,6 +179,8 @@ concept Executor =
 
         { ce.dispatch(c) } -> std::same_as<std::coroutine_handle<>>;
         { ce.post(c) };
+        { ce.transfer_to(executor_ref{}, c) }
+            -> std::same_as<std::coroutine_handle<>>;
     };
 
 } // capy
