@@ -1,0 +1,241 @@
+//
+// Copyright (c) 2026 Steve Gerbino
+//
+// Distributed under the Boost Software License, Version 1.0. (See accompanying
+// file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
+//
+// Official repository: https://github.com/cppalliance/capy
+//
+
+= File I/O
+
+The stream concepts are abstract: any type that provides the right members satisfies them. Capy ships one concrete type that does so out of the box for the filesystem--`file`, a portable synchronous file handle. Point a generic algorithm written against the stream concepts at a `file` and it just works, with no I/O runtime required.
+
+== Prerequisites
+
+* Completed xref:6.streams/6f.isolation.adoc[Physical Isolation]
+* Familiarity with the stream, source, and sink concepts
+
+== The file Handle
+
+`file` wraps a platform file--a POSIX descriptor, a Win32 `HANDLE`, or a stdio `FILE\*`--behind one synchronous interface. The backend is chosen at compile time; the `native_handle_type` and `native_handle()` accessor expose the underlying object when you need it.
+
+[source,cpp]
+----
+#include <boost/capy/file.hpp>
+
+file f("data.txt", file_mode::read);
+
+char buf[1024];
+std::error_code ec;
+std::size_t n = f.read(buf, sizeof(buf), ec);   // 0 means end-of-file
+
+std::uint64_t total = f.size();   // throwing overload
+f.seek(0);                        // rewind
+----
+
+A `file` closes itself when destroyed. It is movable but not copyable.
+
+=== File Modes
+
+[cols="1,2,2"]
+|===
+| Mode | Access | Behavior
+
+| `file_mode::read`
+| Read-only
+| Must exist; random access
+
+| `file_mode::scan`
+| Read-only
+| Must exist; sequential access
+
+| `file_mode::write`
+| Read/write
+| Create or truncate to zero; random access
+
+| `file_mode::write_new`
+| Read/write
+| Must not already exist; random access
+
+| `file_mode::write_existing`
+| Read/write
+| Must exist; random access
+
+| `file_mode::append`
+| Write-only
+| Create if absent; writes go to the end (existing data preserved)
+
+| `file_mode::append_existing`
+| Write-only
+| Must exist; writes go to the end
+|===
+
+=== Error Handling
+
+Every operation offers two overloads. The error-code overload reports failures through an out parameter and never throws:
+
+[source,cpp]
+----
+std::error_code ec;
+f.open("data.txt", file_mode::read, ec);
+if(ec)
+    return;   // handle the failure
+----
+
+The throwing overload omits the `error_code` and raises `std::system_error` instead:
+
+[source,cpp]
+----
+try
+{
+    file f("data.txt", file_mode::read);
+    f.read(buf, n);
+}
+catch(std::system_error const& e)
+{
+    std::cerr << e.what() << "\n";
+}
+----
+
+The raw `read` returns the number of bytes transferred and signals end-of-file by returning `0` with no error set.
+
+== Satisfying the Stream Concepts
+
+Beyond the handle surface, `file` provides the members the stream concepts require, so generic code written against xref:6.streams/6b.streams.adoc[streams] and xref:6.streams/6c.sources-sinks.adoc[sources and sinks] accepts a file directly:
+
+[cols="1,2"]
+|===
+| Concept | Members
+
+| `ReadStream`
+| `read_some`
+
+| `ReadSource`
+| `read_some`, `read`
+
+| `WriteStream`
+| `write_some`
+
+| `WriteSink`
+| `write_some`, `write`, `write_eof`
+|===
+
+These members return immediately-ready awaitables: the blocking I/O happens synchronously when the result is awaited, so the awaiting coroutine never suspends. Because nothing suspends, stop-token cancellation has no effect on a file operation.
+
+The transfer algorithms from xref:6.streams/6e.algorithms.adoc[Transfer Algorithms] work unchanged:
+
+[source,cpp]
+----
+#include <boost/capy/read.hpp>
+#include <boost/capy/write.hpp>
+
+task<> save(std::string_view data)
+{
+    file f("out.bin", file_mode::write);
+    co_await write(f, make_buffer(data));   // fills completely
+}
+
+task<> load(std::string& out)
+{
+    file f("out.bin", file_mode::read);
+    co_await read(f, dynamic_buffer(out));  // reads to end-of-file
+}
+----
+
+A `read_some` at end-of-stream await-returns `(cond::eof, 0)`; a complete `read` that runs short await-returns `(cond::eof, n)` with the bytes transferred so far.
+
+== Buffer Sources and Sinks
+
+The xref:6.streams/6d.buffer-concepts.adoc[buffer concepts] use callee-owned storage, which a bare handle does not have. Two adapters supply it. Each owns a staging buffer whose size you choose (64 KiB by default):
+
+[cols="1,1,2"]
+|===
+| Adapter | Satisfies | Role
+
+| `file_source`
+| `BufferSource`
+| Reads chunks from a file and hands out `const_buffer` views
+
+| `file_sink`
+| `BufferSink`
+| Hands out writable space, then writes committed bytes to a file
+|===
+
+[source,cpp]
+----
+#include <boost/capy/file_sink.hpp>
+#include <boost/capy/file_source.hpp>
+
+task<> copy(file& in, file& out)
+{
+    file_source source(in);
+    file_sink sink(out);
+
+    const_buffer src_arr[4];
+    mutable_buffer dst_arr[4];
+    for(;;)
+    {
+        auto [ec, bufs] = co_await source.pull(src_arr);
+        if(ec == cond::eof)
+        {
+            co_await sink.commit_eof(0);
+            co_return;
+        }
+        auto dst = sink.prepare(dst_arr);
+        std::size_t n = buffer_copy(dst, bufs);
+        co_await sink.commit(n);
+        source.consume(n);
+    }
+}
+----
+
+== Example: Copy a File
+
+[source,cpp]
+----
+void copy_file(char const* src, char const* dst)
+{
+    file in(src, file_mode::read);
+    file out(dst, file_mode::write);
+
+    char buf[4096];
+    for(;;)
+    {
+        std::size_t n = in.read(buf, sizeof(buf));
+        if(n == 0)
+            break;   // end-of-file
+        out.write(buf, n);
+    }
+}
+----
+
+== Example: Append to a Log
+
+[source,cpp]
+----
+void log_message(char const* path, std::string_view msg)
+{
+    file f(path, file_mode::append);
+    f.write(msg.data(), msg.size());
+    f.write("\n", 1);
+}
+----
+
+== Reference
+
+[cols="1,2"]
+|===
+| Header | Provides
+
+| `<boost/capy/file.hpp>`
+| `file`, `file_mode`
+
+| `<boost/capy/file_source.hpp>`
+| `file_source`
+
+| `<boost/capy/file_sink.hpp>`
+| `file_sink`
+|===
+
+You have now completed the Stream Concepts section. These abstractions--streams, sources, sinks, their type-erased wrappers, and a concrete file type that satisfies them--form the foundation for Capy's I/O model. Continue to xref:../8.examples/8a.hello-task.adoc[Example Programs] to see complete working examples.

@@ -117,6 +117,18 @@
 # endif
 #endif
 
+// Synchronous file backend selection: POSIX and Win32 use a native
+// descriptor/handle; the stdio fallback wraps a FILE* for platforms that
+// offer neither.
+#if defined(_WIN32)
+# define BOOST_CAPY_FILE_WIN32
+#elif defined(__unix__) || defined(__APPLE__) || defined(__linux__) || \
+    defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+# define BOOST_CAPY_FILE_POSIX
+#else
+# define BOOST_CAPY_FILE_STDIO
+#endif
+
 //------------------------------------------------
 
 #if (defined(BOOST_CAPY_DYN_LINK) || defined(BOOST_ALL_DYN_LINK)) && !defined(BOOST_CAPY_STATIC_LINK)
