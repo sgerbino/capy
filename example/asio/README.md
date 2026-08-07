@@ -126,6 +126,49 @@ The `use_capy` token:
 
 ---
 
+## executor_bridge.cpp
+
+This example is the reverse of the others: instead of running Capy on
+Asio's loop, it gives Asio code a home on a Capy scheduler. The
+`asio_executor` in `api/asio_executor.hpp` is an Asio standard
+executor that submits every callable to a `capy::Executor` as a
+synthetic-frame `capy::continuation` (the "universal continuation"
+technique of P4126R0) — no coroutine frame, and no changes to any
+Capy executor.
+
+```cpp
+capy::thread_pool pool(4);
+bridge_context ctx(pool.get_executor());
+
+net::post(ctx.get_executor(), []{ /* runs on the pool */ });
+auto strand = net::make_strand(ctx.get_executor());
+
+bridge_timer timer(ctx.get_executor(), 10ms);
+timer.async_wait([](auto ec){ /* completes on the pool */ });
+```
+
+Because the executor satisfies Asio's standard executor requirements
+(including the `blocking`, `relationship`, and `outstanding_work`
+properties and the `context` query), the whole Asio ecosystem
+follows: `post`/`dispatch`/`defer`, `asio::strand`, work guards, and
+I/O objects. `bridge_context` owns a hidden `io_context` and pump
+thread where reactors and services live; completion handlers never
+run there — they dispatch through the bridge executor onto the Capy
+scheduler.
+
+A platform that rejects the synthetic-frame technique could instead
+post a tiny real coroutine per callable, at the cost of a coroutine
+frame per submission.
+
+## Which direction do I need?
+
+| Host application | Home loop | Piece | Example |
+|---|---|---|---|
+| Asio-centric, adopting Capy tasks | `asio::io_context` | `asio_context` + `use_capy` | `any_stream.cpp`, `use_capy_example.cpp` |
+| Capy/corosio-centric, consuming Asio code | Capy scheduler | `bridge_context` + `asio_executor` | `executor_bridge.cpp` |
+
+---
+
 ## Key Takeaways
 
 - **any_stream approach**: Write algorithms once, run them on any I/O backend. Complete portability with no Asio dependency in algorithm code.
@@ -133,3 +176,8 @@ The `use_capy` token:
 - **uni_stream approach**: Implement Asio's Universal Async Model on Capy streams. Full compatibility with Asio's completion token system, enabling use of existing Asio utilities and patterns.
 
 - **use_capy approach**: Call Asio async operations directly from Capy coroutines. Useful when you need access to Asio-specific features or want to integrate existing Asio code into Capy applications.
+
+- **executor_bridge approach**: Run Asio-ecosystem code (handlers,
+  strands, work guards, timers, sockets) on a Capy scheduler via an
+  Asio-shaped executor. The cost lives entirely in the bridge; the
+  native Capy path is unchanged.

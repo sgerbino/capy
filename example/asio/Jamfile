@@ -28,3 +28,7 @@ exe use_capy_example :
     use_capy_example.cpp
     api/capy_streams.cpp
     ;
+
+exe executor_bridge :
+    executor_bridge.cpp
+    ;

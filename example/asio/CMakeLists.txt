@@ -141,3 +141,15 @@ set_property(TARGET capy_example_use_capy
 target_link_libraries(capy_example_use_capy
     Boost::capy
     Boost::asio)
+
+# executor_bridge example (asio-shaped executor over a capy executor)
+add_executable(capy_example_executor_bridge
+    executor_bridge.cpp
+    api/asio_executor.hpp)
+
+set_property(TARGET capy_example_executor_bridge
+    PROPERTY FOLDER "examples")
+
+target_link_libraries(capy_example_executor_bridge
+    Boost::capy
+    Boost::asio)
