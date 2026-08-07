@@ -224,7 +224,7 @@ void test_timer()
 }
 
 // Full asio socket I/O with bridge-typed objects: accept, connect,
-// write, read — every completion on the capy pool. Loopback with
+// write, read, every completion on the capy pool. Loopback with
 // port 0 follows the make_stream_pair precedent in
 // api/capy_streams.cpp.
 void test_socket_echo()

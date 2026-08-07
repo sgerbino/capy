@@ -30,12 +30,7 @@ namespace capy = boost::capy;
 
 namespace bridge_detail {
 
-//----------------------------------------------------------
-//
-// exec_frame - synthetic coroutine frame (P4126R0)
-//
-//----------------------------------------------------------
-
+// Synthetic coroutine frame, P4126R0's "universal continuation".
 // The first two members match the coroutine frame layout used by
 // MSVC, GCC, and Clang, so from_address on an exec_frame yields a
 // handle whose .resume() calls resume(this) and whose .destroy()
@@ -161,12 +156,6 @@ submit(CapyExecutor const& ex, F fn, bool blocking_never)
 
 } // namespace bridge_detail
 
-//----------------------------------------------------------
-//
-// asio_executor - asio-shaped executor over a capy executor
-//
-//----------------------------------------------------------
-
 /** An asio standard executor that submits to a capy executor.
 
     Satisfies asio's standard (P0443-style) executor requirements,
@@ -181,6 +170,10 @@ submit(CapyExecutor const& ex, F fn, bool blocking_never)
     which hosts asio services (strands, reactors, timers).
 
     A callable that throws terminates the program.
+
+    @par Thread Safety
+    Distinct objects: Safe.@n
+    Shared objects: Safe.
 */
 template<capy::Executor E>
 class asio_executor
@@ -201,7 +194,7 @@ public:
     {
     }
 
-    /// Copy; a tracked copy acquires one unit of capy work.
+    /// Construct a copy; a tracked copy acquires one unit of capy work.
     asio_executor(asio_executor const& other) noexcept
         : ex_(other.ex_)
         , io_(other.io_)
@@ -213,7 +206,8 @@ public:
             ex_.on_work_started();
     }
 
-    /// Move; work ownership transfers, the source becomes untracked.
+    /// Construct by move; the work unit transfers and the source
+    /// becomes untracked.
     asio_executor(asio_executor&& other) noexcept
         : ex_(other.ex_)
         , io_(other.io_)
@@ -223,6 +217,8 @@ public:
     {
     }
 
+    /// Assign from another executor; the held work unit follows the
+    /// source's tracked state.
     asio_executor&
     operator=(asio_executor const& other) noexcept
     {
@@ -255,6 +251,10 @@ public:
         `blocking.never` posts; `blocking.possibly` (the default)
         dispatches, which may invoke inline when already on a capy
         scheduler thread.
+
+        @param f The callable to run on the capy scheduler.
+
+        @throws std::bad_alloc If node allocation fails.
     */
     template<class F>
     void
@@ -372,12 +372,6 @@ public:
     }
 };
 
-//----------------------------------------------------------
-//
-// bridge_context - owns the asio side of the bridge
-//
-//----------------------------------------------------------
-
 /** Execution context bridging asio submissions onto a capy executor.
 
     Owns a real `asio::io_context` so asio services (the strand
@@ -386,9 +380,9 @@ public:
     execution flows to the capy executor; the io_context never runs
     user callables.
 
-    Lifetime: the capy context must outlive this object, and this
-    object must outlive every executor and I/O object obtained from
-    it.
+    @par Ownership and Lifetime
+    The capy context must outlive this object, and this object must
+    outlive every executor and I/O object obtained from it.
 
     @par Example
     @code
@@ -410,6 +404,7 @@ class bridge_context
     std::thread pump_;  // no jthread: unavailable on macOS/FreeBSD
 
 public:
+    /// The asio-shaped executor type returned by get_executor().
     using executor_type = asio_executor<E>;
 
     /// Construct over a capy executor; starts the pump thread.
