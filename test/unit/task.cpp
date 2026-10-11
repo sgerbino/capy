@@ -11,6 +11,7 @@
 #include <boost/capy/task.hpp>
 
 #include <boost/capy/ex/io_env.hpp>
+#include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 #include <boost/capy/test/run_blocking.hpp>
@@ -21,6 +22,7 @@
 #include <chrono>
 #include <semaphore>
 #include <thread>
+#include <memory_resource>
 #include <queue>
 #include <stdexcept>
 #include <string>
@@ -1217,6 +1219,69 @@ struct task_test
         BOOST_TEST(td2 == true);
     }
 
+    struct destroy_count_t
+    {
+        int* n;
+        explicit destroy_count_t(int& c) : n(&c) {}
+        destroy_count_t(destroy_count_t&& o) noexcept
+            : n(std::exchange(o.n, nullptr)) {}
+        ~destroy_count_t()
+        {
+            if (n)
+                ++*n;
+        }
+    };
+
+    // Destroying a coroutine that a parent awaits destroys the parent
+    // too, and the parent's task must not destroy it a second time.
+    void testDestroyAwaitedChild()
+    {
+        int child_down = 0, parent_down = 0, handler_down = 0;
+        {
+            auto child = [](destroy_count_t) -> capy::task<void>
+            {
+                co_await self_destroy_awaitable{};
+            };
+            auto parent = [&](destroy_count_t) -> capy::task<void>
+            {
+                co_await child(destroy_count_t(child_down));
+            };
+            int dispatch_count = 0;
+            test_executor ex(dispatch_count);
+            run_async(ex,
+                [t = destroy_count_t(handler_down)] { BOOST_TEST(false); },
+                [](std::exception_ptr) { BOOST_TEST(false); })(
+                parent(destroy_count_t(parent_down)));
+        }
+        BOOST_TEST_EQ(child_down, 1);
+        BOOST_TEST_EQ(parent_down, 1);
+        BOOST_TEST_EQ(handler_down, 1);
+    }
+
+    // Through run(), the child goes and the trampoline is released, but
+    // the chain stops there: the parent may belong to another context.
+    void testDestroyAwaitedChildThroughRun()
+    {
+        int child_down = 0, parent_down = 0;
+        // The parent is left suspended; the arena reclaims it.
+        std::pmr::monotonic_buffer_resource arena;
+        {
+            int dispatch_count = 0;
+            test_executor ex(dispatch_count);
+            auto child = [](destroy_count_t) -> capy::task<void>
+            {
+                co_await self_destroy_awaitable{};
+            };
+            auto parent = [&](destroy_count_t) -> capy::task<void>
+            {
+                co_await capy::run(ex)(child(destroy_count_t(child_down)));
+            };
+            run_async(ex, &arena)(parent(destroy_count_t(parent_down)));
+        }
+        BOOST_TEST_EQ(child_down, 1);
+        BOOST_TEST_EQ(parent_down, 0);
+    }
+
     void testStop()
     {
 
@@ -1321,6 +1386,8 @@ struct task_test
 
         testTearDown();
         testDelete();
+        testDestroyAwaitedChild();
+        testDestroyAwaitedChildThroughRun();
         testStop();
     }
 };
