@@ -88,6 +88,10 @@ class io_awaitable_promise_base
 {
     io_env const* env_ = nullptr;
     mutable std::coroutine_handle<> cont_{std::noop_coroutine()};
+    // The awaiting parent's task object, while it awaits this one;
+    // released before the continuation (that parent) is destroyed.
+    void* owner_ = nullptr;
+    void (*release_owner_)(void*) noexcept = nullptr;
 
 public:
     /** Destroy the promise, destroying an orphaned continuation.
@@ -97,23 +101,46 @@ public:
         stored handle. Destroying it here is what keeps an abandoned
         coroutine from leaking the trampoline frame that was waiting on it.
 
-        @par Preconditions
-        No parent coroutine is awaiting this one. A parent's `await_suspend`
-        installs its own handle as the continuation, so destroying such a
-        coroutine directly would destroy the parent from here as well. See
-        @ref task::handle and @ref quitter::handle for the contract.
+        While a parent awaits this coroutine, the task object that owns
+        this frame, which lives in the parent, is registered with
+        @ref set_owner. It is released first, so destroying the stored
+        continuation does not destroy this frame a second time. This
+        lets the party whose operation holds a suspended coroutine, such
+        as an execution context being torn down, destroy it without
+        destroying it twice.
     */
     ~io_awaitable_promise_base()
     {
-        // Abnormal teardown: destroy an orphaned continuation, e.g.
-        // a run_async trampoline when the task is destroyed before
-        // reaching final_suspend. Callers must not destroy a task
-        // via handle().destroy() while it is being awaited by a
-        // parent coroutine: that puts cont_ under another owner
-        // and would produce a double-destroy from this branch. See
-        // task::handle() / quitter::handle() for the contract.
+        if(owner_)
+            release_owner_(owner_);
         if(cont_ != std::noop_coroutine())
             cont_.destroy();
+    }
+
+    /** Register the task object that owns this coroutine while awaited.
+
+        Called by an awaiter that owns this coroutine's frame and installs
+        its own coroutine as the continuation. If this coroutine is
+        destroyed before it completes, @p owner is released first, so
+        destroying the continuation does not destroy this frame again.
+
+        @param owner The owning task object. It must stay at the same
+            address until @ref clear_owner is called or this coroutine
+            is destroyed.
+    */
+    template<class Owner>
+    void set_owner(Owner& owner) noexcept
+    {
+        owner_         = &owner;
+        release_owner_ = [](void* p) noexcept {
+            static_cast<Owner*>(p)->release();
+        };
+    }
+
+    /// Forget the owner registered with @ref set_owner.
+    void clear_owner() noexcept
+    {
+        owner_ = nullptr;
     }
 
     //----------------------------------------------------------

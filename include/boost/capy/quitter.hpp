@@ -22,6 +22,7 @@
 #include <exception>
 #include <optional>
 #include <type_traits>
+#include <tuple>
 #include <utility>
 
 /* Stop-aware coroutine task.
@@ -469,7 +470,13 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     ~quitter()
     {
         if(h_)
+        {
+            // An awaiting parent is being destroyed with this frame
+            // still suspended; destroying it must not destroy that
+            // parent again through the continuation.
+            std::ignore = h_.promise().continuation();
             h_.destroy();
+        }
     }
 
     /** Return false; quitters are never immediately ready.
@@ -500,6 +507,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     */
     auto await_resume()
     {
+        h_.promise().clear_owner();
         if(h_.promise().stopped())
             throw detail::stop_requested_exception{};
         if(h_.promise().state_ == promise_type::completion::exception)
@@ -531,6 +539,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     {
         h_.promise().set_continuation(cont);
         h_.promise().set_environment(env);
+        h_.promise().set_owner(*this);
         return h_;
     }
 

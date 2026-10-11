@@ -77,6 +77,17 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE boundary_trampoline
     {
         executor_ref caller_ex_;
         continuation parent_;
+        // The awaitable's trampoline object until this completes. A
+        // frame destroyed before then was destroyed by the inner task
+        // being torn down; the parent is left alone, since it may belong
+        // to a context that is already gone.
+        boundary_trampoline* owner_ = nullptr;
+
+        ~promise_type()
+        {
+            if(owner_)
+                owner_->h_ = nullptr;
+        }
 
         boundary_trampoline get_return_object() noexcept
         {
@@ -96,6 +107,7 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE boundary_trampoline
                 auto await_suspend(
                     std::coroutine_handle<>) noexcept
                 {
+                    p_->owner_ = nullptr;
                     p_->caller_ex_.post(p_->parent_);
                     return detail::symmetric_transfer(
                         std::noop_coroutine());
@@ -116,7 +128,11 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE boundary_trampoline
 
     ~boundary_trampoline()
     {
-        if(h_) h_.destroy();
+        if(h_)
+        {
+            h_.promise().owner_ = nullptr;
+            h_.destroy();
+        }
     }
 
     boundary_trampoline(boundary_trampoline const&) = delete;
@@ -129,7 +145,11 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE boundary_trampoline
     {
         if(this != &o)
         {
-            if(h_) h_.destroy();
+            if(h_)
+            {
+                h_.promise().owner_ = nullptr;
+                h_.destroy();
+            }
             h_ = std::exchange(o.h_, nullptr);
         }
         return *this;
@@ -220,18 +240,24 @@ struct [[nodiscard]] run_awaitable_ex
 
     decltype(auto) await_resume()
     {
+        auto& p = inner_.handle().promise();
+        if constexpr(requires { p.clear_owner(); })
+            p.clear_owner();
         return inner_.await_resume();
     }
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> cont, io_env const* caller_env)
     {
         tr_ = make_boundary_trampoline();
+        tr_.h_.promise().owner_     = &tr_;
         tr_.h_.promise().caller_ex_ = caller_env->executor;
         tr_.h_.promise().parent_.h = cont;
 
         auto h = inner_.handle();
         auto& p = h.promise();
         p.set_continuation(tr_.h_);
+        if constexpr(requires { p.set_owner(inner_); })
+            p.set_owner(inner_);
 
         env_.executor = ex_;
         if constexpr (InheritStopToken)
@@ -319,6 +345,9 @@ struct [[nodiscard]] run_awaitable
 
     decltype(auto) await_resume()
     {
+        auto& p = inner_.handle().promise();
+        if constexpr(requires { p.clear_owner(); })
+            p.clear_owner();
         return inner_.await_resume();
     }
 
@@ -327,6 +356,8 @@ struct [[nodiscard]] run_awaitable
         auto h = inner_.handle();
         auto& p = h.promise();
         p.set_continuation(cont);
+        if constexpr(requires { p.set_owner(inner_); })
+            p.set_owner(inner_);
 
         env_.executor = caller_env->executor;
         if constexpr (InheritStopToken)

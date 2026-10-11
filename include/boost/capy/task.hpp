@@ -23,6 +23,7 @@
 #include <exception>
 #include <optional>
 #include <type_traits>
+#include <tuple>
 #include <utility>
 #include <variant>
 
@@ -368,7 +369,13 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     ~task()
     {
         if(h_)
+        {
+            // An awaiting parent is being destroyed with this frame
+            // still suspended; destroying it must not destroy that
+            // parent again through the continuation.
+            std::ignore = h_.promise().continuation();
             h_.destroy();
+        }
     }
 
     /** Report whether the awaited task is already complete.
@@ -399,6 +406,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     [[nodiscard]] auto await_resume()
         requires detail::is_io_result_v<T>
     {
+        h_.promise().clear_owner();
         if(h_.promise().has_ep_)
             std::rethrow_exception(h_.promise().ep_);
         return std::move(*h_.promise().result_);
@@ -407,6 +415,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     auto await_resume()
         requires (! detail::is_io_result_v<T>)
     {
+        h_.promise().clear_owner();
         if(h_.promise().has_ep_)
             std::rethrow_exception(h_.promise().ep_);
         if constexpr (! std::is_void_v<T>)
@@ -434,6 +443,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     {
         h_.promise().set_continuation(cont);
         h_.promise().set_environment(env);
+        h_.promise().set_owner(*this);
         return h_;
     }
 
