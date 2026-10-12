@@ -1018,9 +1018,135 @@ struct when_any_io_result_test
         BOOST_TEST(threw);
     }
 
+    // Both branches torn down from below: the combinator and the
+    // parent go with the last one.
+    void testTeardownOfAllBranchesDestroysParent()
+    {
+        int a_down = 0, b_down = 0, parent_down = 0;
+        std::coroutine_handle<> sa, sb;
+        {
+            auto branch = [](std::coroutine_handle<>* s, destroy_count_t)
+                -> task<io_result<>>
+            {
+                co_await park_awaitable{s};
+                co_return io_result<>{};
+            };
+            auto parent = [&](destroy_count_t) -> task<void>
+            {
+                std::ignore = co_await when_any(
+                    branch(&sa, destroy_count_t(a_down)),
+                    branch(&sb, destroy_count_t(b_down)));
+            };
+            int n = 0;
+            test_executor ex(n);
+            run_async(ex)(parent(destroy_count_t(parent_down)));
+        }
+        BOOST_TEST(sa && sb);
+        sa.destroy();
+        BOOST_TEST_EQ(a_down, 1);
+        BOOST_TEST_EQ(parent_down, 0); // b still holds a share
+        sb.destroy();
+        BOOST_TEST_EQ(b_down, 1);
+        BOOST_TEST_EQ(parent_down, 1);
+    }
+
+    // A branch that finishes after a sibling was lost destroys the
+    // parent instead of resuming it.
+    void testLostBranchParentIsDestroyedNotResumed()
+    {
+        int parent_down = 0;
+        bool resumed = false;
+        std::coroutine_handle<> sa, sb;
+        {
+            auto parked = [](std::coroutine_handle<>* s) -> task<io_result<>>
+            {
+                co_await park_awaitable{s};
+                co_return io_result<>{};
+            };
+            auto failing = [](std::coroutine_handle<>* s) -> task<io_result<>>
+            {
+                co_await park_awaitable{s};
+                co_return io_result<>{make_error_code(error::canceled)};
+            };
+            auto parent = [&](destroy_count_t) -> task<void>
+            {
+                std::ignore = co_await when_any(parked(&sa), failing(&sb));
+                resumed = true;
+            };
+            int n = 0;
+            test_executor ex(n);
+            run_async(ex)(parent(destroy_count_t(parent_down)));
+        }
+        sa.destroy();
+        sb.resume();
+        BOOST_TEST(!resumed);
+        BOOST_TEST_EQ(parent_down, 1);
+    }
+
+    // Parks the when_any runner itself, so tearing it down enters
+    // through the runner's promise rather than through a branch task.
+    struct park_io_awaitable : park_awaitable
+    {
+        io_result<> await_resume() const noexcept { return {}; }
+    };
+
+    // Losing every branch under run_async(ex, alloc) frees the runner
+    // frames before the trampoline holding their allocator.
+    void testLostBranchesFreeBeforeAllocatorOwner()
+    {
+        int parent_down = 0;
+        std::coroutine_handle<> sa, sb;
+        auto parent = [](std::coroutine_handle<>* a,
+            std::coroutine_handle<>* b, destroy_count_t) -> task<void>
+        {
+            std::ignore = co_await when_any(
+                park_io_awaitable{{a}}, park_io_awaitable{{b}});
+        };
+        int n = 0;
+        test_executor ex(n);
+        run_async(ex, std::allocator<std::byte>{})(
+            parent(&sa, &sb, destroy_count_t(parent_down)));
+        sa.destroy();
+        sb.destroy();
+        BOOST_TEST_EQ(parent_down, 1);
+    }
+
+    // Losing a branch asks the others to stop.
+    void testLostBranchRequestsStop()
+    {
+        std::coroutine_handle<> sa, sb;
+        std::stop_token seen;
+        {
+            auto branch = [](std::coroutine_handle<>* s, std::stop_token* out)
+                -> task<io_result<>>
+            {
+                if(out)
+                    *out = (co_await this_coro::environment)->stop_token;
+                co_await park_awaitable{s};
+                co_return io_result<>{};
+            };
+            auto parent = [&]() -> task<void>
+            {
+                std::ignore = co_await when_any(
+                    branch(&sa, nullptr), branch(&sb, &seen));
+            };
+            int n = 0;
+            test_executor ex(n);
+            run_async(ex)(parent());
+        }
+        BOOST_TEST(!seen.stop_requested());
+        sa.destroy();
+        BOOST_TEST(seen.stop_requested());
+        sb.destroy();
+    }
+
     void
     run()
     {
+        testTeardownOfAllBranchesDestroysParent();
+        testLostBranchParentIsDestroyedNotResumed();
+        testLostBranchRequestsStop();
+        testLostBranchesFreeBeforeAllocatorOwner();
         testWinnerPayloadMoveThrows();
         testStopAlreadyRequested();
         testFirstSuccessWins();
