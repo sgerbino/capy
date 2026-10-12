@@ -18,6 +18,7 @@
 #include <boost/capy/concept/write_stream.hpp>
 #include <coroutine>
 #include <boost/capy/ex/executor_ref.hpp>
+#include <boost/capy/ex/frame_alloc_mixin.hpp>
 #include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/io_result.hpp>
 
@@ -97,6 +98,21 @@ class write_now
             std::coroutine_handle<> cont_{nullptr};
             io_env const* env_ = nullptr;
             bool done_ = false;
+
+            // The awaiting op_type while a parent awaits this frame;
+            // released before the parent is destroyed.
+            op_type* owner_ = nullptr;
+
+            ~promise_type()
+            {
+                if(owner_)
+                    owner_->h_ = nullptr;
+                // This frame lives in memory the parent's write_now
+                // frees, so the parent is destroyed only after it.
+                if(cont_ && !done_)
+                    detail::destroy_after_free(
+                        std::exchange(cont_, nullptr), this);
+            }
 
             op_type get_return_object()
             {
@@ -209,8 +225,9 @@ class write_now
             }
 
             static void
-            operator delete(void*, std::size_t) noexcept
+            operator delete(void* p, std::size_t n) noexcept
             {
+                detail::drain_destroy_after_free(p, n);
             }
         };
 
@@ -219,7 +236,11 @@ class write_now
         ~op_type()
         {
             if(h_)
+            {
+                if(!h_.promise().done_ && h_.promise().owner_)
+                    std::terminate();
                 h_.destroy();
+            }
         }
 
         op_type(op_type const&) = delete;
@@ -244,12 +265,14 @@ class write_now
             auto& p = h_.promise();
             p.cont_ = cont;
             p.env_ = env;
+            p.owner_ = this;
             return h_;
         }
 
         [[nodiscard]] io_result<std::size_t> await_resume()
         {
             auto& p = h_.promise();
+            p.owner_ = nullptr;
             if(p.ep_)
                 std::rethrow_exception(p.ep_);
             return p.result_;
