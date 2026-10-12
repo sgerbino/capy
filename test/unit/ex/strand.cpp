@@ -25,6 +25,7 @@
 #include "test_helpers.hpp"
 #include "test_suite.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <memory>
@@ -1047,6 +1048,116 @@ struct strand_test
         BOOST_TEST_EQ(b_down, 1);
     }
 
+    // A frame's parameter holds the last strand handle, so tearing the
+    // frame down destroys a parented coroutine queued on the strand
+    // while the frame's own parent is still deferred.
+    void
+    testStrandParameterDestroysQueuedParentedCoroutine()
+    {
+        int pa_down = 0, pb_down = 0;
+        std::coroutine_handle<> slot_q, slot_f;
+        std::queue<std::coroutine_handle<>> q;
+        auto qa = [](std::coroutine_handle<>* s) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto pa = [qa](std::coroutine_handle<>* s, destroy_count_t)
+            -> task<void>
+        {
+            co_await qa(s);
+        };
+        auto fb = [](strand<queuing_executor>, std::coroutine_handle<>* s)
+            -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto pb = [fb](
+            strand<queuing_executor> st,
+            std::coroutine_handle<>* s,
+            destroy_count_t) -> task<void>
+        {
+            co_await fb(std::move(st), s);
+        };
+        int n = 0;
+        test_executor ex(n);
+        run_async(ex)(pa(&slot_q, destroy_count_t(pa_down)));
+        BOOST_TEST(slot_q);
+
+        continuation c{slot_q};
+        {
+            strand<queuing_executor> s{queuing_executor(q)};
+            s.post(c);
+            BOOST_TEST_EQ(q.size(), 1u);
+            q.front().destroy();
+            q.pop();
+            run_async(ex)(pb(std::move(s), &slot_f, destroy_count_t(pb_down)));
+        }
+        BOOST_TEST(slot_f);
+        BOOST_TEST_EQ(pa_down, 0);
+
+        slot_f.destroy();
+        BOOST_TEST_EQ(pa_down, 1);
+        BOOST_TEST_EQ(pb_down, 1);
+    }
+
+    // The last strand handle sits in a frame that an outer teardown's
+    // drain destroys, so the parent of every queued coroutine is
+    // deferred while that drain is still running.
+    void
+    testCascadeDropsLargeStrandBatch()
+    {
+        constexpr std::size_t count = 64;
+        int parents_down = 0, holder_down = 0;
+        std::array<std::coroutine_handle<>, count> slots{};
+        std::array<continuation, count> conts{};
+        std::coroutine_handle<> slot_leaf;
+        std::queue<std::coroutine_handle<>> q;
+        auto queued = [](std::coroutine_handle<>* s) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto parent = [queued](std::coroutine_handle<>* s, destroy_count_t)
+            -> task<void>
+        {
+            co_await queued(s);
+        };
+        auto leaf = [](std::coroutine_handle<>* s) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto holder = [leaf](
+            strand<queuing_executor>,
+            std::coroutine_handle<>* s,
+            destroy_count_t) -> task<void>
+        {
+            co_await leaf(s);
+        };
+        int n = 0;
+        test_executor ex(n);
+        for(std::size_t i = 0; i < count; ++i)
+            run_async(ex)(parent(&slots[i], destroy_count_t(parents_down)));
+
+        {
+            strand<queuing_executor> s{queuing_executor(q)};
+            for(std::size_t i = 0; i < count; ++i)
+            {
+                conts[i].h = slots[i];
+                s.post(conts[i]);
+            }
+            BOOST_TEST_EQ(q.size(), 1u);
+            q.front().destroy();
+            q.pop();
+            run_async(ex)(holder(
+                std::move(s), &slot_leaf, destroy_count_t(holder_down)));
+        }
+        BOOST_TEST(slot_leaf);
+        BOOST_TEST_EQ(parents_down, 0);
+
+        slot_leaf.destroy();
+        BOOST_TEST_EQ(parents_down, static_cast<int>(count));
+        BOOST_TEST_EQ(holder_down, 1);
+    }
+
     void
     run()
     {
@@ -1075,6 +1186,8 @@ struct strand_test
         testAnyExecutor();
         testQueuedCoroutinesDestroyedWithStrand();
         testPostAfterShutdownDestroyed();
+        testStrandParameterDestroysQueuedParentedCoroutine();
+        testCascadeDropsLargeStrandBatch();
     }
 };
 
