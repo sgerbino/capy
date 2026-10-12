@@ -18,6 +18,14 @@
 
 #include "test_helpers.hpp"
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <csignal>
+#endif
+#include <cstdlib>
+
 #include <atomic>
 #include <chrono>
 #include <semaphore>
@@ -95,6 +103,104 @@ static_assert(Executor<tracking_executor>);
 
 struct task_test
 {
+#if !defined(_WIN32)
+    // Runs fn in a child process and returns its wait status. The
+    // child exits 0 unless fn returns false.
+    template<class F>
+    static int
+    run_in_child(F fn)
+    {
+        pid_t pid = ::fork();
+        if(pid == 0)
+        {
+            // Keep the terminate banner out of the suite's output.
+            int fd = ::open("/dev/null", O_WRONLY);
+            if(fd >= 0)
+                ::dup2(fd, 2);
+            bool ok = true;
+            if constexpr(std::is_same_v<decltype(fn()), bool>)
+                ok = fn();
+            else
+                fn();
+            ::_exit(ok ? 0 : 1);
+        }
+        int status = 0;
+        ::waitpid(pid, &status, 0);
+        return status;
+    }
+
+    // True when fn terminates (std::terminate raises SIGABRT).
+    template<class F>
+    static bool
+    terminates(F fn)
+    {
+        int status = run_in_child(fn);
+        return WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+    }
+
+    // True when fn returns true and the child exits normally.
+    template<class F>
+    static bool
+    exits_cleanly(F fn)
+    {
+        int status = run_in_child(fn);
+        return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    }
+
+    // Start t by hand, as an awaiting parent would, and leave it lent.
+    static void
+    lend(task<void>& t, io_env& env)
+    {
+        t.await_suspend(std::noop_coroutine(), &env).resume();
+    }
+
+    void testDestroyLentTaskTerminates()
+    {
+        BOOST_TEST(terminates([] {
+            std::coroutine_handle<> slot;
+            int n = 0;
+            test_executor ex(n);
+            io_env env{executor_ref(ex), {}, nullptr};
+            auto t = [](std::coroutine_handle<>* s) -> task<void> {
+                co_await park_awaitable{s};
+            }(&slot);
+            lend(t, env);
+            // destructor runs with the frame lent and suspended
+        }));
+    }
+
+    void testMoveAssignOverLentTaskTerminates()
+    {
+        BOOST_TEST(terminates([] {
+            std::coroutine_handle<> slot;
+            int n = 0;
+            test_executor ex(n);
+            io_env env{executor_ref(ex), {}, nullptr};
+            auto body = [](std::coroutine_handle<>* s) -> task<void> {
+                co_await park_awaitable{s};
+            };
+            auto t = body(&slot);
+            lend(t, env);
+            t = body(&slot);
+            std::_Exit(0); // must not be reached
+        }));
+    }
+
+    void testDestroyUnstartedOrFinishedTaskIsFine()
+    {
+        BOOST_TEST(exits_cleanly([] {
+            auto body = []() -> task<void> { co_return; };
+            { auto t = body(); }               // never started
+            int n = 0;
+            test_executor ex(n);
+            io_env env{executor_ref(ex), {}, nullptr};
+            auto t = body();
+            lend(t, env);                     // runs to final_suspend
+            return t.handle().done();
+        }));                                   // finished frame destroyed
+    }
+#endif
+
     static task<int>
     returns_int()
     {
@@ -1332,6 +1438,11 @@ struct task_test
     void
     run()
     {
+#if !defined(_WIN32)
+        testDestroyLentTaskTerminates();
+        testMoveAssignOverLentTaskTerminates();
+        testDestroyUnstartedOrFinishedTaskIsFine();
+#endif
         testBoolSuspendAwaitable();
         testReturnValue();
         testException();

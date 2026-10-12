@@ -23,7 +23,6 @@
 #include <exception>
 #include <optional>
 #include <type_traits>
-#include <tuple>
 #include <utility>
 #include <variant>
 
@@ -365,15 +364,20 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     */
     std::coroutine_handle<promise_type> h_;
 
-    /// Destroy the task and its coroutine frame if owned.
+    /** Destroy the task and its coroutine frame if owned.
+
+        @par Preconditions
+        The frame is not lent: no parent is suspended awaiting it.
+        Destroying a lent frame from above calls `std::terminate`; end
+        a running chain by requesting stop, or by destroying its
+        execution context.
+    */
     ~task()
     {
         if(h_)
         {
-            // An awaiting parent is being destroyed with this frame
-            // still suspended; destroying it must not destroy that
-            // parent again through the continuation.
-            std::ignore = h_.promise().continuation();
+            if(!h_.done() && h_.promise().has_owner())
+                std::terminate();
             h_.destroy();
         }
     }
@@ -515,6 +519,10 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         If this task already owns a coroutine frame, that frame is
         destroyed first. Self-assignment is a no-op.
 
+        @par Preconditions
+        The frame being replaced is not lent: no parent is suspended
+        awaiting it. Replacing a lent frame calls `std::terminate`.
+
         @par Postconditions
         `other` is empty and must not be awaited.
 
@@ -527,7 +535,11 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         if(this != &other)
         {
             if(h_)
+            {
+                if(!h_.done() && h_.promise().has_owner())
+                    std::terminate();
                 h_.destroy();
+            }
             h_ = std::exchange(other.h_, nullptr);
         }
         return *this;

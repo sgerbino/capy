@@ -143,6 +143,12 @@ public:
         owner_ = nullptr;
     }
 
+    /// Return true while an awaiting object owns this coroutine.
+    bool has_owner() const noexcept
+    {
+        return owner_ != nullptr;
+    }
+
     //----------------------------------------------------------
     // Continuation support
     //----------------------------------------------------------
