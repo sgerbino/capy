@@ -125,7 +125,7 @@ post_reaper(executor_ref ex, std::coroutine_handle<> parent) noexcept
     destruction to the caller's executor. The caller's execution context
     must outlive that post.
 */
-struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE boundary_trampoline
+struct boundary_trampoline
 {
     struct promise_type
         : frame_alloc_mixin

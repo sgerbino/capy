@@ -227,7 +227,7 @@ struct when_all_homogeneous_state<std::tuple<>>
     @tparam StateType The state type (when_all_state or when_all_homogeneous_state).
 */
 template<typename StateType>
-struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE when_all_runner
+struct when_all_runner
 {
     struct promise_type
         : frame_alloc_mixin

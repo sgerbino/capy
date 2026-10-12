@@ -241,7 +241,7 @@ struct when_any_io_state
 // Wrapper coroutine for io_result-aware when_any children.
 // unhandled_exception records the exception but does NOT claim winner status.
 template<typename StateType>
-struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE when_any_io_runner
+struct when_any_io_runner
 {
     struct promise_type
         : frame_alloc_mixin

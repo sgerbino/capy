@@ -139,13 +139,6 @@
 #define BOOST_CAPY_CORO_AWAIT_ELIDABLE
 #endif
 
-// Simpler destroy codegen for coroutines that always run to completion
-#if __has_cpp_attribute(clang::coro_only_destroy_when_complete)
-#define BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE [[clang::coro_only_destroy_when_complete]]
-#else
-#define BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE
-#endif
-
 namespace boost::capy::detail {
 inline constexpr unsigned max_iovec_ = 16;
 }

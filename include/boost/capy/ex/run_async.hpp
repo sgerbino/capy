@@ -97,7 +97,7 @@ struct get_promise_awaiter
     @tparam Alloc The allocator type (value type or memory_resource*).
 */
 template<class Ex, class Handlers, class Alloc>
-struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE run_async_trampoline
+struct run_async_trampoline
 {
     using invoke_fn = void(*)(void*, Handlers&);
 
@@ -211,8 +211,7 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE run_async_trampoline
     This avoids double indirection when the user passes a memory_resource*.
 */
 template<class Ex, class Handlers>
-struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE
-    run_async_trampoline<Ex, Handlers, std::pmr::memory_resource*>
+struct run_async_trampoline<Ex, Handlers, std::pmr::memory_resource*>
 {
     using invoke_fn = void(*)(void*, Handlers&);
 
