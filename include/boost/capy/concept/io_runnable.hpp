@@ -79,6 +79,21 @@ namespace capy {
         and allocator through the coroutine chain.
     @li The pointed-to `io_env` must outlive the coroutine.
 
+    @par Requirements
+
+    A type awaited through @ref run or the combinators must also take
+    part in the ownership protocol:
+
+    @li If the coroutine is destroyed before completing, its stored
+        continuation is destroyed no earlier than the deallocation of
+        this frame. Deriving from @ref io_awaitable_promise_base
+        provides this.
+    @li Its `await_suspend` registers the awaiting object as owner of
+        the frame, and `await_resume` clears it, or the type otherwise
+        guarantees the frame is destroyed exactly once.
+    @li Destroying the object, or assigning over it, while the frame is
+        lent to an awaiting chain calls `std::terminate`.
+
     @par Conforming Signatures
 
     @par !example example

@@ -64,6 +64,9 @@ namespace capy {
     itself is always safe, including after the context is
     destroyed.
 
+    Coroutines queued on the strand when its context shuts down are
+    destroyed rather than resumed.
+
     @par Thread Safety
     Distinct objects: Safe.
     Shared objects: Safe.

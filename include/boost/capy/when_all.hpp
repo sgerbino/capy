@@ -649,6 +649,12 @@ public:
     If a child throws, the first child exception is rethrown after
     all children complete (exception beats error_code).
 
+    @note If a branch's coroutine is destroyed before it finishes, for
+        example by teardown of its execution context, `when_all`
+        requests stop on the remaining branches, and the awaiting
+        parent is destroyed rather than resumed once the last branch
+        has finished or been destroyed.
+
     @par Example
     @par !example example_1
 
@@ -762,6 +768,12 @@ template<IoAwaitableRange R>
     If a child throws, the first child exception is rethrown after
     all children complete (exception beats error_code).
 
+    @note If a branch's coroutine is destroyed before it finishes, for
+        example by teardown of its execution context, `when_all`
+        requests stop on the remaining branches, and the awaiting
+        parent is destroyed rather than resumed once the last branch
+        has finished or been destroyed.
+
     @par Example
     @par !example example_2
 
@@ -858,6 +870,12 @@ template<IoAwaitableRange R>
     @par Exception Safety
     If a child throws, the first child exception is rethrown after
     all children complete (exception beats error_code).
+
+    @note If a branch's coroutine is destroyed before it finishes, for
+        example by teardown of its execution context, `when_all`
+        requests stop on the remaining branches, and the awaiting
+        parent is destroyed rather than resumed once the last branch
+        has finished or been destroyed.
 
     @param awaitables One or more awaitables each returning
         io_result<Ts...>.

@@ -72,10 +72,31 @@ namespace capy {
     @par !example example_3
 
 
+    @par Ownership
+    A suspended coroutine is owned by whoever will resume it: the
+    operation, queue or primitive holding its handle. That holder either
+    resumes it or destroys it; destroying it destroys the chain awaiting
+    it, each frame once, from the bottom up. While a parent awaits this
+    coroutine, the parent's awaiting object is registered with
+    @ref set_owner, and destroying the coroutine from above, through that
+    object, calls `std::terminate`. Each frame is deallocated before its
+    parent is destroyed. A promise deriving from this class that defines
+    its own `operator delete` must call
+    `detail::drain_destroy_after_free(ptr, size)` after deallocating.
+    At most 32 deferrals whose frames are not yet deallocated may be
+    outstanding on one thread; more calls `std::terminate`.
+
     @par Thread Safety
     The environment is stored during `await_suspend` and read during
     `co_await this_coro::environment`. These occur on the same logical
     thread of execution, so no synchronization is required.
+
+    @note A chain waiting on a primitive stored in its own frames owns
+    itself through that primitive; it is freed only by a stop request or
+    by the primitive being signalled. A mutex must outlive every
+    coroutine holding or handed its lock. A cross-thread `wake()` racing
+    the teardown of an armed waker's frame on its executor thread is a
+    precondition violation.
 
     @see this_coro::environment, this_coro::executor,
          this_coro::stop_token, this_coro::frame_allocator

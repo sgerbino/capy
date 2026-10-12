@@ -62,6 +62,10 @@ namespace capy {
     `operator()` must not be made until the previous operation has
     completed (i.e., the returned awaitable is fully consumed).
 
+    Destroying a pending operation destroys the coroutine awaiting
+    it. Destroying the returned operation object while it is being
+    awaited calls `std::terminate`.
+
     @par Example
 
     @code

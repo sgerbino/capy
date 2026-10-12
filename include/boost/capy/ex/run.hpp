@@ -750,6 +750,16 @@ namespace boost::capy {
     Returns a wrapper that accepts a task and produces an awaitable.
     When co_awaited, the task runs on the specified executor.
 
+    If the inner task is destroyed before it completes, for example
+    because its execution context is torn down, the caller's parent
+    coroutine is destroyed through a post to the caller's executor. The
+    awaitable holds work on that executor until the parent resumes or
+    is destroyed.
+
+    @par Preconditions
+    The caller's execution context outlives the inner task and the post
+    of the parent's destruction. This is not detected.
+
     @par Example
     @par !example example_2
 
@@ -774,6 +784,8 @@ run(Ex ex)
     @param st The stop token for cooperative cancellation.
 
     @return A wrapper that accepts a task for execution.
+
+    @see run(Ex), which describes teardown and its precondition.
 */
 template<Executor Ex>
 [[nodiscard]] auto
@@ -789,6 +801,8 @@ run(Ex ex, std::stop_token st)
     @param mr The memory resource for frame allocation.
 
     @return A wrapper that accepts a task for execution.
+
+    @see run(Ex), which describes teardown and its precondition.
 */
 template<Executor Ex>
 [[nodiscard]] auto
@@ -804,6 +818,8 @@ run(Ex ex, std::pmr::memory_resource* mr)
     @param alloc The allocator for frame allocation.
 
     @return A wrapper that accepts a task for execution.
+
+    @see run(Ex), which describes teardown and its precondition.
 */
 template<Executor Ex, detail::Allocator Alloc>
 [[nodiscard]] auto
@@ -820,6 +836,8 @@ run(Ex ex, Alloc alloc)
     @param mr The memory resource for frame allocation.
 
     @return A wrapper that accepts a task for execution.
+
+    @see run(Ex), which describes teardown and its precondition.
 */
 template<Executor Ex>
 [[nodiscard]] auto
@@ -836,6 +854,8 @@ run(Ex ex, std::stop_token st, std::pmr::memory_resource* mr)
     @param alloc The allocator for frame allocation.
 
     @return A wrapper that accepts a task for execution.
+
+    @see run(Ex), which describes teardown and its precondition.
 */
 template<Executor Ex, detail::Allocator Alloc>
 [[nodiscard]] auto

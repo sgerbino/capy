@@ -118,6 +118,9 @@ private:
     This context is created internally by @ref run_blocking.
     Users do not interact with it directly.
 
+    Coroutines still queued when the context is destroyed are
+    destroyed rather than resumed.
+
     @par Thread Safety
     The event loop runs on the thread that calls `run()`.
     `signal_done()` and `enqueue()` are safe to call from

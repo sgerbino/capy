@@ -726,6 +726,12 @@ public:
     fail and the reported failure is an exception, that child's
     exception is rethrown (which child is unspecified).
 
+    @note If a branch's coroutine is destroyed before it finishes, for
+        example by teardown of its execution context, `when_any`
+        requests stop on the remaining branches, and the awaiting
+        parent is destroyed rather than resumed once the last branch
+        has finished or been destroyed.
+
     @par Example
     @par !example example_1
 
@@ -844,6 +850,12 @@ template<IoAwaitableRange R>
     @par Exception Safety
     If all children fail and the reported failure is an exception,
     that child's exception is rethrown (which child is unspecified).
+
+    @note If a branch's coroutine is destroyed before it finishes, for
+        example by teardown of its execution context, `when_any`
+        requests stop on the remaining branches, and the awaiting
+        parent is destroyed rather than resumed once the last branch
+        has finished or been destroyed.
 
     @par Example
     @par !example example_2
@@ -970,6 +982,12 @@ template<IoAwaitableRange R>
         benign error (e.g. @c cond::canceled) count as a win, wrap
         the child to translate the error into success. See the
         Concurrent Composition tutorial.
+
+    @note If a branch's coroutine is destroyed before it finishes, for
+        example by teardown of its execution context, `when_any`
+        requests stop on the remaining branches, and the awaiting
+        parent is destroyed rather than resumed once the last branch
+        has finished or been destroyed.
 */
 template<IoAwaitable... As>
     requires (sizeof...(As) > 0)
