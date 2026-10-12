@@ -89,6 +89,19 @@ struct when_all_core
     continuation continuation_;
     io_env const* caller_env_ = nullptr;
 
+    // Set when a branch is destroyed before finishing: the parent is
+    // then destroyed rather than resumed.
+    std::atomic<bool> lost_{false};
+
+    /// Drop a share held by a runner that never finished.
+    void lose_branch() noexcept
+    {
+        lost_.store(true, std::memory_order_relaxed);
+        stop_source_.request_stop();
+        if(remaining_count_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            std::exchange(continuation_.h, nullptr).destroy();
+    }
+
     explicit when_all_core(std::size_t count) noexcept
         : remaining_count_(count)
     {
@@ -217,6 +230,13 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE when_all_runner
         StateType* state_ = nullptr;
         std::size_t index_ = 0;
         io_env env_;
+        bool done_ = false;
+
+        ~promise_type()
+        {
+            if(!done_ && state_)
+                state_->core_.lose_branch();
+        }
 
         when_all_runner get_return_object() noexcept
         {
@@ -239,15 +259,22 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE when_all_runner
                 {
                     auto& core = p_->state_->core_;
                     auto* counter = &core.remaining_count_;
+                    auto* lost = &core.lost_;
                     auto* caller_env = core.caller_env_;
                     auto& cont = core.continuation_;
 
+                    p_->done_ = true;
                     h.destroy();
 
                     auto remaining = counter->fetch_sub(1, std::memory_order_acq_rel);
-                    if(remaining == 1)
-                        return detail::symmetric_transfer(caller_env->executor.dispatch(cont));
-                    return detail::symmetric_transfer(std::noop_coroutine());
+                    if(remaining != 1)
+                        return detail::symmetric_transfer(std::noop_coroutine());
+                    if(lost->load(std::memory_order_relaxed))
+                    {
+                        std::exchange(cont.h, nullptr).destroy();
+                        return detail::symmetric_transfer(std::noop_coroutine());
+                    }
+                    return detail::symmetric_transfer(caller_env->executor.dispatch(cont));
                 }
                 void await_resume() const noexcept {} // LCOV_EXCL_LINE final_suspend awaiter, never resumed
             };
