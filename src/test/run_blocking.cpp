@@ -34,6 +34,22 @@ blocking_context::blocking_context()
 
 blocking_context::~blocking_context()
 {
+    // Nothing will run these now; destroy them as their owner. The
+    // services may post while they shut down or are destroyed, so the
+    // queue outlives both.
+    auto drain = [this]
+    {
+        while(!impl_->queue.empty())
+        {
+            auto h = impl_->queue.front();
+            impl_->queue.pop();
+            h.destroy();
+        }
+    };
+    shutdown();
+    drain();
+    destroy();
+    drain();
     delete impl_;
 }
 

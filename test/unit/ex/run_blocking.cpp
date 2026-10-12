@@ -11,12 +11,16 @@
 #include <boost/capy/test/run_blocking.hpp>
 
 #include <boost/capy/task.hpp>
+#include <boost/capy/ex/strand.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 
+#include "test_helpers.hpp"
 #include "test_suite.hpp"
 
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace boost {
 namespace capy {
@@ -36,6 +40,68 @@ struct test_exception : std::runtime_error
     {
     }
 };
+
+namespace {
+
+// Posts a continuation from its destructor, as a frame-local primitive
+// does when it is torn down.
+struct posts_on_destroy
+{
+    blocking_executor ex;
+    continuation* c;
+
+    posts_on_destroy(blocking_executor e, continuation* cc) noexcept
+        : ex(e)
+        , c(cc)
+    {
+    }
+
+    posts_on_destroy(posts_on_destroy&& o) noexcept
+        : ex(o.ex)
+        , c(std::exchange(o.c, nullptr))
+    {
+    }
+
+    ~posts_on_destroy()
+    {
+        if(c)
+            ex.post(*c);
+    }
+};
+
+task<void>
+posting_probe(destroy_count_t, posts_on_destroy)
+{
+    co_return;
+}
+
+task<void>
+plain_probe(destroy_count_t)
+{
+    co_return;
+}
+
+// Posts from its destructor, after the context's services shut down.
+struct dtor_poster : execution_context::service
+{
+    blocking_executor ex_;
+    continuation* c_;
+
+    dtor_poster(execution_context&, blocking_executor ex, continuation& c)
+        : ex_(ex)
+        , c_(&c)
+    {
+    }
+
+    ~dtor_poster()
+    {
+        ex_.post(*c_);
+    }
+
+    void shutdown() override {}
+};
+
+} // namespace
 
 //----------------------------------------------------------
 // run_blocking Tests
@@ -300,6 +366,65 @@ struct run_blocking_test
         BOOST_TEST_EQ(result, 43);
     }
 
+    void
+    testDestroyedContextDestroysQueued()
+    {
+        int down = 0;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        auto t = probe(destroy_count_t(down));
+        auto h = t.handle();
+        t.release();
+        {
+            test::blocking_context ctx;
+            continuation c{h};
+            ctx.get_executor().post(c);
+        }
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // Work posted while the services are destroyed is destroyed too.
+    void
+    testPostFromServiceDestructor()
+    {
+        int down = 0;
+        auto t = plain_probe(destroy_count_t(down));
+        continuation c{t.handle()};
+        t.release();
+        {
+            blocking_context ctx;
+            ctx.make_service<dtor_poster>(ctx.get_executor(), c);
+        }
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // A frame its services destroy at shutdown can post to the context;
+    // that work is destroyed, not written into a freed queue.
+    void
+    testPostDuringServiceShutdown()
+    {
+        int down = 0;
+        int posted_down = 0;
+        std::optional<strand<blocking_executor>> s;
+        continuation c1;
+        continuation c2;
+        {
+            blocking_context ctx;
+            auto ex = ctx.get_executor();
+            s.emplace(ex);
+            auto t2 = plain_probe(destroy_count_t(posted_down));
+            c2.h = t2.handle();
+            t2.release();
+            auto t1 = posting_probe(
+                destroy_count_t(down), posts_on_destroy(ex, &c2));
+            c1.h = t1.handle();
+            t1.release();
+            s->post(c1);
+        }
+        s.reset();
+        BOOST_TEST_EQ(down, 1);
+        BOOST_TEST_EQ(posted_down, 1);
+    }
+
     //----------------------------------------------------------
 
     void
@@ -307,6 +432,8 @@ struct run_blocking_test
     {
         // Basic Functionality
         testVoidTaskNoHandler();
+        testPostDuringServiceShutdown();
+        testPostFromServiceDestructor();
         testIntTaskNoHandler();
         testIntTaskWithHandler();
         testVoidTaskWithHandler();
@@ -331,6 +458,9 @@ struct run_blocking_test
 
         // Nested Tasks
         testNestedTask();
+
+        // Teardown
+        testDestroyedContextDestroysQueued();
     }
 };
 
