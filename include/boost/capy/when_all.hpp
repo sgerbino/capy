@@ -93,13 +93,18 @@ struct when_all_core
     // then destroyed rather than resumed.
     std::atomic<bool> lost_{false};
 
-    /// Drop a share held by a runner that never finished.
-    void lose_branch() noexcept
+    /** Drop a share held by a runner that never finished.
+
+        @param recorder The address of the runner promise being
+        destroyed, whose frame frees before the parent is destroyed.
+    */
+    void lose_branch(void const* recorder) noexcept
     {
         lost_.store(true, std::memory_order_relaxed);
         stop_source_.request_stop();
         if(remaining_count_.fetch_sub(1, std::memory_order_acq_rel) == 1)
-            std::exchange(continuation_.h, nullptr).destroy();
+            detail::destroy_after_free(
+                std::exchange(continuation_.h, nullptr), recorder);
     }
 
     explicit when_all_core(std::size_t count) noexcept
@@ -235,7 +240,7 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE when_all_runner
         ~promise_type()
         {
             if(!done_ && state_)
-                state_->core_.lose_branch();
+                state_->core_.lose_branch(this);
         }
 
         when_all_runner get_return_object() noexcept

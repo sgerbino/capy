@@ -28,6 +28,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <semaphore>
 #include <thread>
 #include <memory_resource>
@@ -1351,6 +1352,62 @@ struct task_test
         BOOST_TEST_EQ(handler_down, 1);
     }
 
+    // The trampoline of run_async(ex, alloc) holds the allocator that
+    // frames below it deallocate through, so teardown from below must
+    // free each frame before destroying its parent.
+    void testTeardownFreesChildBeforeAllocatorOwner()
+    {
+        int parent_down = 0;
+        std::coroutine_handle<> slot;
+        auto child = [](std::coroutine_handle<>* s) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto parent = [child](std::coroutine_handle<>* s, destroy_count_t)
+            -> task<void>
+        {
+            co_await child(s);
+        };
+        int n = 0;
+        test_executor ex(n);
+        run_async(ex, std::allocator<std::byte>{})(
+            parent(&slot, destroy_count_t(parent_down)));
+        BOOST_TEST(slot);
+        slot.destroy();
+        BOOST_TEST_EQ(parent_down, 1);
+    }
+
+    // A by-value parameter that owns another frame is destroyed after
+    // the promise but before the frame is freed; freeing that frame must
+    // not destroy the parents of the frame still being torn down.
+    void testTeardownWithFrameOwningParameter()
+    {
+        int parent_down = 0;
+        std::coroutine_handle<> slot;
+        auto sub = []() -> task<void>
+        {
+            co_return;
+        };
+        auto leaf = [](task<void> t, std::coroutine_handle<>* s)
+            -> task<void>
+        {
+            std::ignore = t;
+            co_await park_awaitable{s};
+        };
+        auto parent = [sub, leaf](std::coroutine_handle<>* s, destroy_count_t)
+            -> task<void>
+        {
+            co_await leaf(sub(), s);
+        };
+        int n = 0;
+        test_executor ex(n);
+        run_async(ex, std::allocator<std::byte>{})(
+            parent(&slot, destroy_count_t(parent_down)));
+        BOOST_TEST(slot);
+        slot.destroy();
+        BOOST_TEST_EQ(parent_down, 1);
+    }
+
     // Through run(), the child goes and the trampoline is released, but
     // the chain stops there: the parent may belong to another context.
     void testDestroyAwaitedChildThroughRun()
@@ -1486,6 +1543,8 @@ struct task_test
         testDelete();
         testDestroyAwaitedChild();
         testDestroyAwaitedChildThroughRun();
+        testTeardownFreesChildBeforeAllocatorOwner();
+        testTeardownWithFrameOwningParameter();
         testStop();
     }
 };

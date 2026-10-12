@@ -14,12 +14,95 @@
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/recycling_memory_resource.hpp>
 
+#include <coroutine>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <memory_resource>
+#include <utility>
 
 namespace boost {
 namespace capy {
+namespace detail {
+
+// A frame's memory may come from a resource stored in an ancestor frame,
+// so a parent destroyed from a child's promise destructor is destroyed
+// only after the child's frame is deallocated. The recorder's address
+// keys the deferral to its own frame: frames owned by its parameters
+// are freed in between and must not drain it.
+struct destroy_after_free_state
+{
+    std::coroutine_handle<> pending;
+    void const* recorder = nullptr;
+    bool draining = false;
+};
+
+#if BOOST_CAPY_WORKAROUND(_MSC_VER, >= 1) && !defined(__clang__)
+__declspec(noinline)
+#endif
+inline destroy_after_free_state&
+destroy_after_free_tls() noexcept
+{
+    static thread_local destroy_after_free_state s;
+    return s;
+}
+
+/** Record a coroutine to destroy once the current frame is freed.
+
+    Called from a promise destructor, so the parent it records is
+    destroyed after the frame being destroyed has been deallocated.
+
+    @par Preconditions
+    No coroutine is already recorded. @p recorder lies within the
+    frame being destroyed, and that frame is deallocated by
+    `frame_alloc_mixin::operator delete` or by an `operator delete`
+    that calls @ref drain_destroy_after_free after deallocating.
+
+    @param h The coroutine to destroy.
+
+    @param recorder The address of the promise being destroyed.
+*/
+inline void
+destroy_after_free(
+    std::coroutine_handle<> h, void const* recorder) noexcept
+{
+    auto& s = destroy_after_free_tls();
+    BOOST_CAPY_ASSERT(!s.pending);
+    s.pending = h;
+    s.recorder = recorder;
+}
+
+/** Destroy recorded coroutines once their recording frame is freed.
+
+    Does nothing unless the pending coroutine was recorded from within
+    the frame that occupied `[frame, frame + size)`. A call made while
+    another call on the same thread is draining returns immediately,
+    and the outer call destroys whatever the frames it destroys
+    record, so a whole chain is destroyed iteratively instead of
+    recursively.
+
+    @param frame The address of the frame just deallocated.
+
+    @param size The size of that frame, as passed to `operator delete`.
+*/
+inline void
+drain_destroy_after_free(void const* frame, std::size_t size) noexcept
+{
+    auto& s = destroy_after_free_tls();
+    if(!s.pending || s.draining)
+        return;
+    // Only the integer values are compared; the frame is already freed.
+    auto const lo = reinterpret_cast<std::uintptr_t>(frame);
+    auto const at = reinterpret_cast<std::uintptr_t>(s.recorder);
+    if(at - lo >= size)
+        return;
+    s.draining = true;
+    while(auto h = std::exchange(s.pending, nullptr))
+        h.destroy();
+    s.draining = false;
+}
+
+} // namespace detail
 
 /** Mixin that adds frame-allocator-aware allocation to a promise type.
 
@@ -94,6 +177,8 @@ struct frame_alloc_mixin
         Reads the allocator pointer stored at the end of the frame
         to ensure correct deallocation regardless of current TLS.
         Bypasses virtual dispatch for the recycling allocator.
+        Then destroys any parent recorded by
+        `detail::destroy_after_free` while this frame was destroyed.
 
         @param ptr The frame storage returned by `operator new`.
 
@@ -113,6 +198,7 @@ struct frame_alloc_mixin
                 ->deallocate_fast(ptr, total, alignof(std::max_align_t));
         else
             mr->deallocate(ptr, total, alignof(std::max_align_t));
+        detail::drain_destroy_after_free(ptr, size);
     }
 };
 

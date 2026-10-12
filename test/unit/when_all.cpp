@@ -22,6 +22,7 @@
 
 #include <atomic>
 #include <latch>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -1292,6 +1293,34 @@ struct when_all_io_result_test
         BOOST_TEST_EQ(parent_down, 1);
     }
 
+    // Parks the when_all runner itself, so tearing it down enters
+    // through the runner's promise rather than through a branch task.
+    struct park_io_awaitable : park_awaitable
+    {
+        io_result<> await_resume() const noexcept { return {}; }
+    };
+
+    // Losing every branch under run_async(ex, alloc) frees the runner
+    // frames before the trampoline holding their allocator.
+    void testLostBranchesFreeBeforeAllocatorOwner()
+    {
+        int parent_down = 0;
+        std::coroutine_handle<> sa, sb;
+        auto parent = [](std::coroutine_handle<>* a,
+            std::coroutine_handle<>* b, destroy_count_t) -> task<void>
+        {
+            std::ignore = co_await when_all(
+                park_io_awaitable{{a}}, park_io_awaitable{{b}});
+        };
+        int n = 0;
+        test_executor ex(n);
+        run_async(ex, std::allocator<std::byte>{})(
+            parent(&sa, &sb, destroy_count_t(parent_down)));
+        sa.destroy();
+        sb.destroy();
+        BOOST_TEST_EQ(parent_down, 1);
+    }
+
     // Losing a branch asks the others to stop.
     void testLostBranchRequestsStop()
     {
@@ -1348,6 +1377,7 @@ struct when_all_io_result_test
         testTeardownOfAllBranchesDestroysParent();
         testLostBranchParentIsDestroyedNotResumed();
         testLostBranchRequestsStop();
+        testLostBranchesFreeBeforeAllocatorOwner();
     }
 };
 

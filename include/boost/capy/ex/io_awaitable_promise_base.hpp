@@ -108,13 +108,24 @@ public:
         lets the party whose operation holds a suspended coroutine, such
         as an execution context being torn down, destroy it without
         destroying it twice.
+
+        The continuation is destroyed after this frame has been
+        deallocated, so a frame whose memory comes from a resource held
+        by an ancestor is freed before that ancestor.
+
+        @par Preconditions
+        The derived promise either uses the `operator delete` of
+        @ref frame_alloc_mixin, or calls
+        `detail::drain_destroy_after_free(ptr, size)` after deallocating
+        in its own.
     */
     ~io_awaitable_promise_base()
     {
         if(owner_)
             release_owner_(owner_);
         if(cont_ != std::noop_coroutine())
-            cont_.destroy();
+            detail::destroy_after_free(
+                std::exchange(cont_, std::noop_coroutine()), this);
     }
 
     /** Register the task object that owns this coroutine while awaited.
