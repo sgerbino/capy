@@ -16,10 +16,13 @@
 #include <boost/capy/task.hpp>
 
 #include <chrono>
+#include <memory>
+#include <queue>
 #include <stop_token>
 #include <thread>
+#include <tuple>
 
-#include "test_suite.hpp"
+#include "test_helpers.hpp"
 
 namespace boost {
 namespace capy {
@@ -253,8 +256,96 @@ struct async_waker_test
         }
     }
 
+    // A destroyed waker can no longer wake its waiter, so the waiter
+    // resumes with an error instead of disappearing.
+    void testDestroyWakerCancelsWaiter()
+    {
+        int down = 0;
+        std::error_code ec;
+        auto w = std::make_unique<async_waker>();
+        auto waiter = [](async_waker& wk, std::error_code& out,
+            destroy_count_t) -> task<void>
+        {
+            auto [e] = co_await wk.wait();
+            out = e;
+        };
+        std::queue<std::coroutine_handle<>> q;
+        run_async(queuing_executor(q))(waiter(*w, ec, destroy_count_t(down)));
+        pump(q);
+        w.reset();
+        BOOST_TEST_EQ(down, 0);
+        BOOST_TEST_EQ(q.size(), 1u);
+        pump(q);
+        BOOST_TEST(ec == make_error_code(error::canceled));
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // The waiter's stop callback reaches into the waker, so a stop
+    // requested after the waker is gone must find it deregistered.
+    void testStopAfterWakerDestroyed()
+    {
+        std::error_code ec;
+        auto w = std::make_unique<async_waker>();
+        std::stop_source ss;
+        auto waiter = [](async_waker& wk, std::error_code& out) -> task<void>
+        {
+            auto [e] = co_await wk.wait();
+            out = e;
+        };
+        std::queue<std::coroutine_handle<>> q;
+        run_async(queuing_executor(q), ss.get_token())(waiter(*w, ec));
+        pump(q);
+        w.reset();
+        ss.request_stop();
+        BOOST_TEST_EQ(q.size(), 1u);
+        pump(q);
+        BOOST_TEST(ec == make_error_code(error::canceled));
+    }
+
+    // A waiter claimed by its stop request belongs to the executor's
+    // queue: discarding it after the waker is gone touches nothing.
+    void testStopClaimedWaiterOutlivesWaker()
+    {
+        auto p = std::make_unique<async_waker>();
+        std::queue<std::coroutine_handle<>> q;
+        std::stop_source ss;
+        auto waiter = [](async_waker& x) -> task<void>
+        {
+            std::ignore = co_await x.wait();
+        };
+        run_async(queuing_executor(q), ss.get_token())(waiter(*p));
+        pump(q);
+        ss.request_stop();
+        BOOST_TEST_EQ(q.size(), 1u);
+        p.reset();
+        q.front().destroy();
+        q.pop();
+    }
+
+    // Same for a waiter claimed by wake().
+    void testWakeClaimedWaiterOutlivesWaker()
+    {
+        auto p = std::make_unique<async_waker>();
+        std::queue<std::coroutine_handle<>> q;
+        auto waiter = [](async_waker& x) -> task<void>
+        {
+            std::ignore = co_await x.wait();
+        };
+        run_async(queuing_executor(q))(waiter(*p));
+        pump(q);
+        p->wake();
+        BOOST_TEST_EQ(q.size(), 1u);
+        p.reset();
+        q.front().destroy();
+        q.pop();
+    }
+
     void run()
     {
+        testStopClaimedWaiterOutlivesWaker();
+        testWakeClaimedWaiterOutlivesWaker();
+        testDestroyWakerCancelsWaiter();
+        testStopAfterWakerDestroyed();
         testLatchedTokenBeforeWait();
         testWakeAfterWaitResumes();
         testCrossThreadWake();

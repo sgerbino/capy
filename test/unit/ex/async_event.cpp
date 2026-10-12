@@ -21,9 +21,11 @@
 #include <boost/capy/task.hpp>
 #include <boost/capy/when_all.hpp>
 
+#include <memory>
 #include <queue>
 #include <semaphore>
 #include <stop_token>
+#include <tuple>
 #include <vector>
 
 #include "test_helpers.hpp"
@@ -735,9 +737,114 @@ struct async_event_test
         BOOST_TEST(finished);
     }
 
+    // A destroyed event can no longer be set, so its waiters resume
+    // with an error instead of disappearing.
+    void testDestroyEventCancelsWaiters()
+    {
+        int down = 0;
+        std::error_code ec;
+        auto ev = std::make_unique<async_event>();
+        auto waiter = [](async_event& e, std::error_code& out,
+            destroy_count_t) -> task<void>
+        {
+            auto [r] = co_await e.wait();
+            out = r;
+        };
+        std::queue<std::coroutine_handle<>> q;
+        run_async(queuing_executor(q))(waiter(*ev, ec, destroy_count_t(down)));
+        pump(q);
+        ev.reset();
+        BOOST_TEST_EQ(down, 0);
+        BOOST_TEST_EQ(q.size(), 1u);
+        pump(q);
+        BOOST_TEST(ec == make_error_code(error::canceled));
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // An event owned by a frame that an outer teardown destroys posts
+    // every waiter; each then resumes with an error, or is destroyed
+    // if its execution context is torn down too.
+    void testCascadeCancelsManyWaiters()
+    {
+        constexpr int count = 64;
+        int inner_down = 0, outer_down = 0, server_down = 0;
+        int canceled = 0;
+        std::coroutine_handle<> slot;
+        std::queue<std::coroutine_handle<>> q;
+        queuing_executor ex(q);
+        auto inner = [&](async_event& e, destroy_count_t) -> task<void>
+        {
+            auto [r] = co_await e.wait();
+            if(r == make_error_code(error::canceled))
+                ++canceled;
+        };
+        auto outer = [&](async_event& e, destroy_count_t) -> task<void>
+        {
+            co_await inner(e, destroy_count_t(inner_down));
+        };
+        auto leaf = [](std::coroutine_handle<>* s) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto server = [&](destroy_count_t) -> task<void>
+        {
+            async_event ev;
+            for(int i = 0; i < count; ++i)
+                run_async(ex)(outer(ev, destroy_count_t(outer_down)));
+            co_await leaf(&slot);
+        };
+        run_async(ex)(server(destroy_count_t(server_down)));
+        pump(q);
+        BOOST_TEST(slot);
+
+        slot.destroy();
+        BOOST_TEST_EQ(server_down, 1);
+        BOOST_TEST_EQ(inner_down, 0);
+        BOOST_TEST_EQ(q.size(), static_cast<std::size_t>(count));
+
+        // Half resume, half are torn down with their context.
+        for(int i = 0; i < count / 2; ++i)
+        {
+            auto h = q.front();
+            q.pop();
+            h.resume();
+        }
+        while(!q.empty())
+        {
+            q.front().destroy();
+            q.pop();
+        }
+        BOOST_TEST_EQ(canceled, count / 2);
+        BOOST_TEST_EQ(inner_down, count);
+        BOOST_TEST_EQ(outer_down, count);
+    }
+
+    // A waiter claimed by its stop request belongs to the executor's
+    // queue: discarding it after the event is gone touches nothing.
+    void testStopClaimedWaiterOutlivesEvent()
+    {
+        auto p = std::make_unique<async_event>();
+        std::queue<std::coroutine_handle<>> q;
+        std::stop_source ss;
+        auto waiter = [](async_event& x) -> task<void>
+        {
+            std::ignore = co_await x.wait();
+        };
+        run_async(queuing_executor(q), ss.get_token())(waiter(*p));
+        pump(q);
+        ss.request_stop();
+        BOOST_TEST_EQ(q.size(), 1u);
+        p.reset();
+        q.front().destroy();
+        q.pop();
+    }
+
     void
     run()
     {
+        testStopClaimedWaiterOutlivesEvent();
+        testDestroyEventCancelsWaiters();
+        testCascadeCancelsManyWaiters();
         testInitialState();
         testSetAndClear();
         testWaitOnSetEvent();

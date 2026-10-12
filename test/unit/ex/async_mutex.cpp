@@ -15,10 +15,13 @@
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/io_result.hpp>
+#include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/task.hpp>
 
+#include <memory>
 #include <queue>
 #include <stop_token>
+#include <tuple>
 
 // GCC gives false positive -Wmaybe-uninitialized on structured bindings
 // via the tuple protocol inside coroutine frames.
@@ -1009,9 +1012,104 @@ struct async_mutex_test
         h2.destroy();
     }
 
+    // A destroyed mutex can no longer grant the lock, so its waiters
+    // resume with an error instead of disappearing.
+    void testDestroyMutexCancelsWaiters()
+    {
+        int down = 0;
+        std::error_code ec;
+        auto m = std::make_unique<async_mutex>();
+        BOOST_TEST(m->lock().await_ready()); // held by the test
+        auto waiter = [](async_mutex& mx, std::error_code& out,
+            destroy_count_t) -> task<void>
+        {
+            auto [e] = co_await mx.lock();
+            out = e;
+        };
+        std::queue<std::coroutine_handle<>> q;
+        run_async(queuing_executor(q))(waiter(*m, ec, destroy_count_t(down)));
+        pump(q);
+        m.reset();
+        BOOST_TEST_EQ(down, 0);
+        BOOST_TEST_EQ(q.size(), 1u);
+        pump(q);
+        BOOST_TEST(ec == make_error_code(error::canceled));
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // A waiter the destroyed mutex posted is still destroyed when its
+    // execution context is torn down instead of run.
+    void testCanceledWaiterDestroyedAtTeardown()
+    {
+        int down = 0;
+        auto m = std::make_unique<async_mutex>();
+        BOOST_TEST(m->lock().await_ready());
+        auto waiter = [](async_mutex& mx, destroy_count_t) -> task<void>
+        {
+            std::ignore = co_await mx.lock();
+        };
+        std::queue<std::coroutine_handle<>> q;
+        run_async(queuing_executor(q))(waiter(*m, destroy_count_t(down)));
+        pump(q);
+        m.reset();
+        BOOST_TEST_EQ(q.size(), 1u);
+        q.front().destroy();
+        q.pop();
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // The lock handed to a waiter that is destroyed before it resumes
+    // passes on instead of staying held.
+    void testHandoffToDestroyedWaiterUnlocks()
+    {
+        async_mutex m;
+        BOOST_TEST(m.lock().await_ready());
+        std::queue<std::coroutine_handle<>> q;
+        auto waiter = [](async_mutex& mx) -> task<void>
+        {
+            std::ignore = co_await mx.lock();
+            mx.unlock();
+        };
+        run_async(queuing_executor(q))(waiter(m));
+        pump(q);                 // waiter queued on the mutex
+        m.unlock();              // hands the lock over, posts the waiter
+        BOOST_TEST_EQ(q.size(), 1u);
+        q.front().destroy();     // torn down before it resumes
+        q.pop();
+        BOOST_TEST(!m.is_locked());
+    }
+
+    // A waiter claimed by its stop request belongs to the executor's
+    // queue: discarding it after the mutex is gone touches nothing.
+    void testStopClaimedWaiterOutlivesMutex()
+    {
+        auto p = std::make_unique<async_mutex>();
+        std::queue<std::coroutine_handle<>> q;
+        std::stop_source ss;
+        // Held by the test, not a coroutine: nothing unlocks it later,
+        // and unlocking first would pop the claimed waiter before the
+        // destructor could see it.
+        BOOST_TEST(p->lock().await_ready());
+        auto waiter = [](async_mutex& x) -> task<void>
+        {
+            std::ignore = co_await x.lock();
+        };
+        run_async(queuing_executor(q), ss.get_token())(waiter(*p));
+        pump(q);
+        ss.request_stop();
+        BOOST_TEST_EQ(q.size(), 1u);
+        p.reset();
+        q.front().destroy();
+        q.pop();
+    }
+
     void
     run()
     {
+        testStopClaimedWaiterOutlivesMutex();
+        testDestroyMutexCancelsWaiters();
+        testCanceledWaiterDestroyedAtTeardown();
+        testHandoffToDestroyedWaiterUnlocks();
         testAcquireUnlocked();
         testContendedLock();
         testCancellation();
