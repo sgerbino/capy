@@ -449,7 +449,9 @@ protected:
         subsequent calls have no effect.
 
         @par Effects
-        Each service's `shutdown()` member function is invoked once.
+        Each service's `shutdown()` member function is invoked once. A
+        service created after this call has its `shutdown()` invoked as
+        soon as it is created, so it too starts in a stopped state.
 
         @par Postconditions
         @li All services are in a stopped state.

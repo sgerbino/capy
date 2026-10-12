@@ -123,11 +123,15 @@ class execution_context;
 
     @par Executor Validity
 
-    An executor becomes invalid when the first call to
-    `ctx.shutdown()` returns. Calling `dispatch`, `post`,
-    `on_work_started`, or `on_work_finished` on an invalid executor
-    is undefined behavior. Copy, comparison, and `context()` remain
-    valid until the context is destroyed.
+    Once `ctx.shutdown()` has begun, the context runs no more work.
+    `dispatch` and `post` remain valid until the context is destroyed,
+    but never run the coroutine they are given: the executor destroys
+    it, either at once or no later than the context's destruction.
+    Destroying it destroys the chain awaiting it, as when a context
+    destroys the coroutines it holds. Copy, comparison, `context()`,
+    `on_work_started`, and `on_work_finished` also remain valid until
+    the context is destroyed. Calling any member after the context is
+    destroyed is undefined behavior.
 
     @par Thread Safety
     Distinct objects: Safe.

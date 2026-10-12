@@ -42,6 +42,7 @@ public:
     std::shared_ptr<std::mutex> mutexes_[num_mutexes];
     intrusive_list<strand_impl> impl_list_;
     std::atomic<void*> invoker_frame_cache_{nullptr};
+    bool shutdown_ = false;
 
     explicit
     strand_service_impl(execution_context&)
@@ -54,6 +55,13 @@ public:
         auto new_impl = std::make_shared<strand_impl>();
 
         std::lock_guard<std::mutex> lock(mutex_);
+        if(shutdown_)
+        {
+            // Born closed, like the strands shutdown() closed: it
+            // borrows nothing from this service.
+            new_impl->locked_ = true;
+            return new_impl;
+        }
 
         std::size_t s = salt_++;
         std::size_t idx = reinterpret_cast<std::size_t>(new_impl.get());
@@ -70,17 +78,29 @@ public:
         return new_impl;
     }
 
-    static bool
+    // Returns the service when the caller must post an invoker.
+    static strand_service_impl*
     enqueue(strand_impl& impl, continuation& c)
     {
-        std::lock_guard<std::mutex> lock(*impl.mutex_);
-        impl.pending_.push(c);
-        if(!impl.locked_)
+        // A closed strand never locks: the mutex it borrowed may have
+        // gone with its service.
+        if(impl.service_.load(std::memory_order_acquire))
         {
-            impl.locked_ = true;
-            return true;
+            std::lock_guard<std::mutex> lock(*impl.mutex_);
+            if(auto* svc = impl.service_.load(std::memory_order_relaxed))
+            {
+                impl.pending_.push(c);
+                if(!impl.locked_)
+                {
+                    impl.locked_ = true;
+                    return svc;
+                }
+                return nullptr;
+            }
         }
-        return false;
+        // Shut down: nothing will run it, so destroy it as its owner.
+        c.h.destroy();
+        return nullptr;
     }
 
     static void
@@ -120,19 +140,38 @@ public:
 
     // Defined below; needs strand_invoker complete.
     static void
-    post_invoker(std::shared_ptr<strand_impl> impl, executor_ref ex);
+    post_invoker(
+        strand_service_impl* svc,
+        std::shared_ptr<strand_impl> impl,
+        executor_ref ex);
 
 protected:
     void
     shutdown() override
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        while(auto* p = impl_list_.pop_front())
+        strand_queue::taken_batch doomed;
         {
-            std::lock_guard<std::mutex> impl_lock(*p->mutex_);
-            p->locked_ = true;
-            p->service_.store(nullptr, std::memory_order_release);
+            std::lock_guard<std::mutex> lock(mutex_);
+            shutdown_ = true;
+            while(auto* p = impl_list_.pop_front())
+            {
+                std::lock_guard<std::mutex> impl_lock(*p->mutex_);
+                p->locked_ = true;
+                p->service_.store(nullptr, std::memory_order_release);
+                auto b = p->pending_.take_all();
+                if(b.head)
+                {
+                    if(doomed.tail)
+                        doomed.tail->reserved = b.head;
+                    else
+                        doomed.head = b.head;
+                    doomed.tail = b.tail;
+                }
+            }
         }
+        // Outside the mutexes: a destroyed frame may drop the last
+        // strand handle and re-enter the service.
+        strand_queue::destroy_batch(doomed);
 
         void* fp = invoker_frame_cache_.exchange(
             kCacheClosed, std::memory_order_acq_rel);
@@ -160,18 +199,27 @@ struct strand_invoker
         // posting to the inner executor.
         continuation self_;
 
+        // The service is the one enqueue() saw under the strand's lock;
+        // the impl's own pointer may be cleared by a concurrent shutdown.
         void*
         operator new(
             std::size_t n,
-            std::shared_ptr<strand_impl> const& impl)
+            strand_service_impl* svc,
+            std::shared_ptr<strand_impl> const&)
         {
-            auto* svc = impl->service_.load(std::memory_order_acquire);
             constexpr auto A = alignof(strand_service_impl*);
             std::size_t padded = (n + A - 1) & ~(A - 1);
             std::size_t total = padded + sizeof(strand_service_impl*);
 
-            void* p = svc->invoker_frame_cache_.exchange(
-                nullptr, std::memory_order_acquire);
+            // Never takes the closed marker, which would let a later
+            // delete park a frame that nothing frees.
+            void* p = svc->invoker_frame_cache_.load(
+                std::memory_order_acquire);
+            while(p && p != kCacheClosed &&
+                !svc->invoker_frame_cache_.compare_exchange_weak(
+                    p, nullptr, std::memory_order_acquire))
+            {
+            }
             if(!p || p == kCacheClosed)
                 p = ::operator new(total);
 
@@ -214,7 +262,7 @@ struct strand_invoker
 // strand drop.
 static
 strand_invoker
-make_invoker(std::shared_ptr<strand_impl> impl)
+make_invoker(strand_service_impl*, std::shared_ptr<strand_impl> impl)
 {
     auto* p = impl.get();
     for(;;)
@@ -231,10 +279,11 @@ make_invoker(std::shared_ptr<strand_impl> impl)
 
 void
 strand_service_impl::post_invoker(
+    strand_service_impl* svc,
     std::shared_ptr<strand_impl> impl,
     executor_ref ex)
 {
-    auto invoker = make_invoker(std::move(impl));
+    auto invoker = make_invoker(svc, std::move(impl));
     auto& self = invoker.h_.promise().self_;
     self.h = invoker.h_;
     ex.post(self);
@@ -242,10 +291,14 @@ strand_service_impl::post_invoker(
 
 strand_impl::~strand_impl()
 {
-    auto* svc = service_.load(std::memory_order_acquire);
-    if(!svc) return;
-    std::lock_guard<std::mutex> lock(svc->mutex_);
-    svc->impl_list_.remove(this);
+    if(auto* svc = service_.load(std::memory_order_acquire))
+    {
+        std::lock_guard<std::mutex> lock(svc->mutex_);
+        svc->impl_list_.remove(this);
+    }
+    // Nothing can run these any more; destroy them as their owner.
+    auto batch = pending_.take_all();
+    strand_queue::destroy_batch(batch);
 }
 
 strand_service::
@@ -274,8 +327,8 @@ dispatch(
     if(running_in_this_thread(*impl))
         return c.h;
 
-    if(strand_service_impl::enqueue(*impl, c))
-        strand_service_impl::post_invoker(impl, ex);
+    if(auto* svc = strand_service_impl::enqueue(*impl, c))
+        strand_service_impl::post_invoker(svc, impl, ex);
     return std::noop_coroutine();
 }
 
@@ -286,8 +339,8 @@ post(
     executor_ref ex,
     continuation& c)
 {
-    if(strand_service_impl::enqueue(*impl, c))
-        strand_service_impl::post_invoker(impl, ex);
+    if(auto* svc = strand_service_impl::enqueue(*impl, c))
+        strand_service_impl::post_invoker(svc, impl, ex);
 }
 
 strand_service&

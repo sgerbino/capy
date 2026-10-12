@@ -22,10 +22,12 @@
 #include <boost/capy/task.hpp>
 #include <boost/capy/test/run_blocking.hpp>
 
+#include "test_helpers.hpp"
 #include "test_suite.hpp"
 
 #include <atomic>
 #include <chrono>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -39,20 +41,6 @@ static_assert(Executor<strand<thread_pool::executor_type>>,
     "strand must satisfy Executor concept");
 static_assert(Executor<strand<any_executor>>,
     "strand<any_executor> must satisfy Executor concept");
-
-// Helper to wait for a condition with timeout
-template<class Pred>
-bool wait_for(Pred pred, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
-{
-    auto start = std::chrono::steady_clock::now();
-    while(!pred())
-    {
-        if(std::chrono::steady_clock::now() - start > timeout)
-            return false;
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    return true;
-}
 
 // Simple test coroutine that increments a counter
 struct counter_coro
@@ -955,6 +943,44 @@ struct strand_test
         }
     }
 
+    // Service shutdown destroys what is still queued on every strand
+    // of the context, not only the first.
+    void
+    testShutdownDestroysQueuedAcrossStrands()
+    {
+        int down[4] = {};
+        continuation conts[4] = {};
+        std::queue<std::coroutine_handle<>> q;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        for(std::size_t i = 0; i < 4; ++i)
+        {
+            auto t = probe(destroy_count_t(down[i]));
+            conts[i].h = t.handle();
+            t.release();
+        }
+        auto ctx = std::make_unique<test_io_context>();
+        queuing_executor qe(q);
+        qe.ctx_ = ctx.get();
+        strand<queuing_executor> s1{qe};
+        strand<queuing_executor> s2{qe};
+        s1.post(conts[0]);
+        s1.post(conts[1]);
+        s2.post(conts[2]);
+        s2.post(conts[3]);
+        BOOST_TEST_EQ(q.size(), 2u);
+        while(!q.empty())
+        {
+            q.front().destroy();
+            q.pop();
+        }
+        for(int d : down)
+            BOOST_TEST_EQ(d, 0);
+
+        ctx.reset();
+        for(int d : down)
+            BOOST_TEST_EQ(d, 1);
+    }
+
     void
     testShutdownReleasesLiveStrand()
     {
@@ -970,9 +996,61 @@ struct strand_test
         (void)s;
     }
 
+    // A strand whose service has shut down destroys what is posted to
+    // it, since nothing will ever run it.
+    void
+    testPostAfterShutdownDestroyed()
+    {
+        struct closable_context : test_io_context
+        {
+            using execution_context::shutdown;
+        };
+        int down = 0;
+        std::queue<std::coroutine_handle<>> q;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        auto t = probe(destroy_count_t(down));
+        continuation c{t.handle()};
+        t.release();
+        auto ctx = std::make_unique<closable_context>();
+        queuing_executor qe(q);
+        qe.ctx_ = ctx.get();
+        strand<queuing_executor> s{qe};
+        ctx->shutdown();
+        s.post(c);
+        BOOST_TEST_EQ(down, 1);
+        BOOST_TEST(q.empty());
+    }
+
+    // Coroutines queued behind a drained invoker have no runner once
+    // the strand is dropped; the strand destroys them.
+    void
+    testQueuedCoroutinesDestroyedWithStrand()
+    {
+        int a_down = 0, b_down = 0;
+        std::queue<std::coroutine_handle<>> q;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        auto ta = probe(destroy_count_t(a_down));
+        auto tb = probe(destroy_count_t(b_down));
+        continuation ca{ta.handle()};
+        continuation cb{tb.handle()};
+        ta.release();
+        tb.release();
+        {
+            strand<queuing_executor> s{queuing_executor(q)};
+            s.post(ca);
+            s.post(cb);
+            BOOST_TEST_EQ(q.size(), 1u);
+            q.front().destroy();
+            q.pop();
+        }
+        BOOST_TEST_EQ(a_down, 1);
+        BOOST_TEST_EQ(b_down, 1);
+    }
+
     void
     run()
     {
+        testShutdownDestroysQueuedAcrossStrands();
         testShutdownReleasesLiveStrand();
         testConstruct();
         testCopy();
@@ -995,6 +1073,8 @@ struct strand_test
         testSerialization();
         testExitStrandAfterRun();
         testAnyExecutor();
+        testQueuedCoroutinesDestroyedWithStrand();
+        testPostAfterShutdownDestroyed();
     }
 };
 

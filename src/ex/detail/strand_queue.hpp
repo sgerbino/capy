@@ -15,6 +15,8 @@
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 
+#include <utility>
+
 namespace boost {
 namespace capy {
 namespace detail {
@@ -105,6 +107,28 @@ public:
             continuation* c = batch.head;
             batch.head = static_cast<continuation*>(c->reserved);
             safe_resume(c->h);
+        }
+        batch.tail = nullptr;
+    }
+
+    /** Destroy each coroutine in a taken batch without resuming it.
+
+        Used when the strand can no longer run them. Advances past
+        each node first, since the node may live in the frame being
+        destroyed.
+
+        @param batch The batch to destroy.
+    */
+    static
+    void
+    destroy_batch(taken_batch& batch) noexcept
+    {
+        while(batch.head)
+        {
+            continuation* c = batch.head;
+            batch.head = static_cast<continuation*>(c->reserved);
+            if(auto h = std::exchange(c->h, nullptr))
+                h.destroy();
         }
         batch.tail = nullptr;
     }
