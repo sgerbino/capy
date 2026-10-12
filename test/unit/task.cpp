@@ -1219,19 +1219,6 @@ struct task_test
         BOOST_TEST(td2 == true);
     }
 
-    struct destroy_count_t
-    {
-        int* n;
-        explicit destroy_count_t(int& c) : n(&c) {}
-        destroy_count_t(destroy_count_t&& o) noexcept
-            : n(std::exchange(o.n, nullptr)) {}
-        ~destroy_count_t()
-        {
-            if (n)
-                ++*n;
-        }
-    };
-
     // Destroying a coroutine that a parent awaits destroys the parent
     // too, and the parent's task must not destroy it a second time.
     void testDestroyAwaitedChild()

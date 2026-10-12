@@ -79,17 +79,6 @@ make_log_coro(std::vector<std::string>& log, std::string msg)
     }(&log, std::move(msg));
 }
 
-inline void
-pump(std::queue<std::coroutine_handle<>>& q)
-{
-    while(!q.empty())
-    {
-        auto h = q.front();
-        q.pop();
-        h.resume();
-    }
-}
-
 } // namespace
 
 struct run_priority_test

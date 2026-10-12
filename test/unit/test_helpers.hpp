@@ -29,6 +29,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 
 // Valgrind slows execution ~10-20x; scale timing-sensitive
 // durations to avoid false failures.
@@ -480,6 +481,55 @@ struct yield_awaitable
     {
     }
 };
+
+/** Counts its own destruction; a frame parameter of this type
+    reports when the frame is destroyed.
+*/
+struct destroy_count_t
+{
+    int* n;
+    explicit destroy_count_t(int& c) : n(&c) {}
+    destroy_count_t(destroy_count_t&& o) noexcept
+        : n(std::exchange(o.n, nullptr)) {}
+    ~destroy_count_t()
+    {
+        if(n)
+            ++*n;
+    }
+};
+
+/** Parks the awaiting coroutine, handing its handle to the test.
+
+    The test then plays the holder: resume `*slot`, or destroy it as a
+    context's teardown would.
+*/
+struct park_awaitable
+{
+    std::coroutine_handle<>* slot;
+
+    bool await_ready() const noexcept { return false; }
+
+    std::coroutine_handle<>
+    await_suspend(std::coroutine_handle<> h, io_env const*) noexcept
+    {
+        *slot = h;
+        return std::noop_coroutine();
+    }
+
+    void await_resume() const noexcept {}
+};
+
+/// Resume queued handles in FIFO order until the queue is empty.
+inline void
+pump(std::queue<std::coroutine_handle<>>& q)
+{
+    while(!q.empty())
+    {
+        auto h = q.front();
+        q.pop();
+        h.resume();
+    }
+}
 
 } // capy
 } // boost
