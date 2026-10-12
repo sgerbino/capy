@@ -18,7 +18,7 @@
 #include <boost/capy/concept/write_stream.hpp>
 #include <coroutine>
 #include <boost/capy/ex/executor_ref.hpp>
-#include <boost/capy/ex/frame_alloc_mixin.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/io_result.hpp>
 
@@ -92,7 +92,10 @@ class write_now
     void* cached_frame_ = nullptr;
     std::size_t cached_size_ = 0;
 
-    struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
+    // Not coro_await_elidable: eliding the frame would skip its
+    // operator delete, which finishes a teardown deferral. The frame
+    // is cached by write_now, so elision gains nothing anyway.
+    struct [[nodiscard]]
         op_type
     {
         struct promise_type
@@ -112,10 +115,13 @@ class write_now
                 if(owner_)
                     owner_->h_ = nullptr;
                 // This frame lives in memory the parent's write_now
-                // frees, so the parent is destroyed only after it.
+                // frees, so the parent is destroyed only after this
+                // frame's operator delete, even under a raw destroy().
                 if(cont_ && !done_)
-                    detail::destroy_after_free(
-                        std::exchange(cont_, nullptr), this);
+                {
+                    detail::begin_self_drain(this);
+                    detail::destroy_parent(std::exchange(cont_, nullptr));
+                }
             }
 
             op_type get_return_object()
@@ -231,7 +237,7 @@ class write_now
             static void
             operator delete(void* p, std::size_t n) noexcept
             {
-                detail::drain_destroy_after_free(p, n);
+                detail::finish_self_drain(p, n);
             }
         };
 

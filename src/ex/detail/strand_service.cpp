@@ -99,7 +99,7 @@ public:
             }
         }
         // Shut down: nothing will run it, so destroy it as its owner.
-        c.h.destroy();
+        capy::destroy(c.h);
         return nullptr;
     }
 

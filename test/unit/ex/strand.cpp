@@ -16,6 +16,7 @@
 
 #include <boost/capy/concept/executor.hpp>
 #include <boost/capy/ex/any_executor.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 #include <boost/capy/ex/thread_pool.hpp>
@@ -29,6 +30,8 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -971,7 +974,7 @@ struct strand_test
         BOOST_TEST_EQ(q.size(), 2u);
         while(!q.empty())
         {
-            q.front().destroy();
+            capy::destroy(q.front());
             q.pop();
         }
         for(int d : down)
@@ -995,6 +998,161 @@ struct strand_test
         };
         auto s = make();
         (void)s;
+    }
+
+    // A strand's first post racing its service's shutdown either queues
+    // an invoker the test then destroys, or is destroyed at once; the
+    // closed invoker cache is never reopened.
+    void
+    testFirstPostRacesShutdown()
+    {
+        struct locked_queue
+        {
+            std::mutex m;
+            std::vector<std::coroutine_handle<>> v;
+        };
+        struct locked_executor
+        {
+            locked_queue* q_;
+            test_io_context* ctx_;
+
+            bool operator==(locked_executor const& o) const noexcept
+            {
+                return q_ == o.q_;
+            }
+            test_io_context& context() const noexcept { return *ctx_; }
+            void on_work_started() const noexcept {}
+            void on_work_finished() const noexcept {}
+            std::coroutine_handle<> dispatch(continuation& c) const
+            {
+                post(c);
+                return std::noop_coroutine();
+            }
+            void post(continuation& c) const
+            {
+                std::lock_guard<std::mutex> lk(q_->m);
+                q_->v.push_back(c.h);
+            }
+        };
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        for(int i = 0; i < 1000; ++i)
+        {
+            int down = 0;
+            locked_queue q;
+            auto ctx = std::make_unique<closable_test_context>();
+            locked_executor le{&q, ctx.get()};
+            auto s = std::make_unique<strand<locked_executor>>(le);
+            auto t = probe(destroy_count_t(down));
+            continuation c{t.handle()};
+            t.release();
+            std::atomic<int> go{0};
+            std::thread a([&]{
+                go.fetch_add(1);
+                while(go.load() < 2)
+                {
+                }
+                s->post(c);
+            });
+            go.fetch_add(1);
+            while(go.load() < 2)
+            {
+            }
+            ctx->shutdown();
+            a.join();
+            for(auto h : q.v)
+                capy::destroy(h);
+            q.v.clear();
+            s.reset();
+            ctx.reset();
+            BOOST_TEST_EQ(down, 1);
+        }
+    }
+
+    // A strand made after its service shut down is closed from the
+    // start: what is posted to it is destroyed, and its handle can be
+    // dropped after the context is gone.
+    void
+    testStrandCreatedAfterShutdownIsClosed()
+    {
+        int down = 0;
+        std::queue<std::coroutine_handle<>> q;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        auto t = probe(destroy_count_t(down));
+        continuation c{t.handle()};
+        t.release();
+        auto ctx = std::make_unique<closable_test_context>();
+        queuing_executor qe(q);
+        qe.ctx_ = ctx.get();
+        strand<queuing_executor> before{qe};
+        ctx->shutdown();
+        auto after = std::make_unique<strand<queuing_executor>>(qe);
+        after->post(c);
+        BOOST_TEST_EQ(down, 1);
+        BOOST_TEST(q.empty());
+        ctx.reset();
+        after.reset();
+    }
+
+    // The same when the strand service itself is first created after
+    // the shutdown.
+    void
+    testStrandServiceCreatedAfterShutdown()
+    {
+        int down = 0;
+        std::queue<std::coroutine_handle<>> q;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        auto t = probe(destroy_count_t(down));
+        continuation c{t.handle()};
+        t.release();
+        auto ctx = std::make_unique<closable_test_context>();
+        queuing_executor qe(q);
+        qe.ctx_ = ctx.get();
+        ctx->shutdown();
+        auto s = std::make_unique<strand<queuing_executor>>(qe);
+        s->post(c);
+        BOOST_TEST_EQ(down, 1);
+        BOOST_TEST(q.empty());
+        ctx.reset();
+        s.reset();
+    }
+
+    // An older service's destructor runs after the strand service is
+    // gone; a post from it is destroyed without touching that service.
+    void
+    testPostAfterServiceDestroyed()
+    {
+        static int down;
+        down = 0;
+        struct older_service : execution_context::service
+        {
+            std::queue<std::coroutine_handle<>> q;
+            std::optional<strand<queuing_executor>> s;
+            continuation c;
+
+            explicit older_service(execution_context&) {}
+
+            ~older_service()
+            {
+                auto probe = [](destroy_count_t) -> task<void>
+                {
+                    co_return;
+                };
+                auto t = probe(destroy_count_t(down));
+                c.h = t.handle();
+                t.release();
+                s->post(c);
+            }
+
+            void shutdown() override {}
+        };
+        {
+            test_io_context ctx;
+            auto& svc = ctx.make_service<older_service>();
+            queuing_executor qe(svc.q);
+            qe.ctx_ = &ctx;
+            svc.s.emplace(qe);
+        }
+        BOOST_TEST_EQ(down, 1);
     }
 
     // A strand whose service has shut down destroys what is posted to
@@ -1041,7 +1199,7 @@ struct strand_test
             s.post(ca);
             s.post(cb);
             BOOST_TEST_EQ(q.size(), 1u);
-            q.front().destroy();
+            capy::destroy(q.front());
             q.pop();
         }
         BOOST_TEST_EQ(a_down, 1);
@@ -1088,21 +1246,21 @@ struct strand_test
             strand<queuing_executor> s{queuing_executor(q)};
             s.post(c);
             BOOST_TEST_EQ(q.size(), 1u);
-            q.front().destroy();
+            capy::destroy(q.front());
             q.pop();
             run_async(ex)(pb(std::move(s), &slot_f, destroy_count_t(pb_down)));
         }
         BOOST_TEST(slot_f);
         BOOST_TEST_EQ(pa_down, 0);
 
-        slot_f.destroy();
+        capy::destroy(slot_f);
         BOOST_TEST_EQ(pa_down, 1);
         BOOST_TEST_EQ(pb_down, 1);
     }
 
-    // The last strand handle sits in a frame that an outer teardown's
-    // drain destroys, so the parent of every queued coroutine is
-    // deferred while that drain is still running.
+    // The last strand handle sits in a frame that an outer teardown
+    // destroys, so every queued coroutine and its parent are destroyed
+    // inside that teardown, with no limit on how many.
     void
     testCascadeDropsLargeStrandBatch()
     {
@@ -1145,7 +1303,7 @@ struct strand_test
                 s.post(conts[i]);
             }
             BOOST_TEST_EQ(q.size(), 1u);
-            q.front().destroy();
+            capy::destroy(q.front());
             q.pop();
             run_async(ex)(holder(
                 std::move(s), &slot_leaf, destroy_count_t(holder_down)));
@@ -1153,7 +1311,7 @@ struct strand_test
         BOOST_TEST(slot_leaf);
         BOOST_TEST_EQ(parents_down, 0);
 
-        slot_leaf.destroy();
+        capy::destroy(slot_leaf);
         BOOST_TEST_EQ(parents_down, static_cast<int>(count));
         BOOST_TEST_EQ(holder_down, 1);
     }
@@ -1186,6 +1344,10 @@ struct strand_test
         testAnyExecutor();
         testQueuedCoroutinesDestroyedWithStrand();
         testPostAfterShutdownDestroyed();
+        testStrandCreatedAfterShutdownIsClosed();
+        testFirstPostRacesShutdown();
+        testStrandServiceCreatedAfterShutdown();
+        testPostAfterServiceDestroyed();
         testStrandParameterDestroysQueuedParentedCoroutine();
         testCascadeDropsLargeStrandBatch();
     }

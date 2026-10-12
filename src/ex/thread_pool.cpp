@@ -11,6 +11,7 @@
 #include <boost/capy/ex/thread_pool.hpp>
 #include <boost/capy/continuation.hpp>
 #include <boost/capy/detail/thread_local_ptr.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/test/thread_name.hpp>
 #include <algorithm>
@@ -126,7 +127,7 @@ public:
         {
             auto h = c->h;
             if(h && h != std::noop_coroutine())
-                h.destroy();
+                capy::destroy(h);
         }
     }
 

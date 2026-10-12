@@ -13,6 +13,7 @@
 
 #include <boost/capy/continuation.hpp>
 #include <boost/capy/detail/config.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 
 #include <utility>
@@ -128,7 +129,7 @@ public:
             continuation* c = batch.head;
             batch.head = static_cast<continuation*>(c->reserved);
             if(auto h = std::exchange(c->h, nullptr))
-                h.destroy();
+                capy::destroy(h);
         }
         batch.tail = nullptr;
     }

@@ -12,6 +12,7 @@
 #define BOOST_CAPY_EX_IO_AWAITABLE_PROMISE_BASE_HPP
 
 #include <boost/capy/detail/config.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/frame_alloc_mixin.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/io_env.hpp>
@@ -79,12 +80,12 @@ namespace capy {
     it, each frame once, from the bottom up. While a parent awaits this
     coroutine, the parent's awaiting object is registered with
     @ref set_owner, and destroying the coroutine from above, through that
-    object, calls `std::terminate`. Each frame is deallocated before its
-    parent is destroyed. A promise deriving from this class that defines
-    its own `operator delete` must call
-    `detail::drain_destroy_after_free(ptr, size)` after deallocating.
-    At most 32 deferrals whose frames are not yet deallocated may be
-    outstanding on one thread; more calls `std::terminate`.
+    object, calls `std::terminate`. A holder destroys the coroutine with
+    @ref destroy, which frees each frame before destroying the parent it
+    releases. A raw `h.destroy()` made while no @ref destroy is in
+    progress on the thread destroys each parent immediately, which is
+    correct only while no frame is allocated from a resource owned by
+    one of its ancestors, as under `run_async(ex, alloc)`.
 
     @par Thread Safety
     The environment is stored during `await_suspend` and read during
@@ -130,23 +131,19 @@ public:
         as an execution context being torn down, destroy it without
         destroying it twice.
 
-        The continuation is destroyed after this frame has been
+        When this coroutine is destroyed through @ref destroy, the
+        continuation is destroyed after this frame has been
         deallocated, so a frame whose memory comes from a resource held
-        by an ancestor is freed before that ancestor.
-
-        @par Preconditions
-        The derived promise either uses the `operator delete` of
-        @ref frame_alloc_mixin, or calls
-        `detail::drain_destroy_after_free(ptr, size)` after deallocating
-        in its own.
+        by an ancestor is freed before that ancestor. Otherwise it is
+        destroyed here.
     */
     ~io_awaitable_promise_base()
     {
         if(owner_)
             release_owner_(owner_);
         if(cont_ != std::noop_coroutine())
-            detail::destroy_after_free(
-                std::exchange(cont_, std::noop_coroutine()), this);
+            detail::destroy_parent(
+                std::exchange(cont_, std::noop_coroutine()));
     }
 
     /** Register the task object that owns this coroutine while awaited.

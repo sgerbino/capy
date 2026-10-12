@@ -12,6 +12,8 @@
 
 #include <boost/capy/concept/io_awaitable.hpp>
 #include <boost/capy/error.hpp>
+#include <boost/capy/ex/destroy.hpp>
+#include <boost/capy/ex/strand.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/ex/run_async.hpp>
@@ -21,6 +23,7 @@
 #include <boost/capy/task.hpp>
 #include <boost/capy/when_all.hpp>
 
+#include <cstddef>
 #include <memory>
 #include <queue>
 #include <semaphore>
@@ -34,6 +37,61 @@ namespace boost {
 namespace capy {
 
 static_assert(IoAwaitable<async_event::wait_awaiter>);
+
+namespace {
+
+// Destroys what is posted to it, as a strand whose service shut down does.
+struct destroying_executor
+{
+    bool operator==(destroying_executor const&) const noexcept
+    {
+        return true;
+    }
+    test_io_context& context() const noexcept
+    {
+        return default_test_io_context();
+    }
+    void on_work_started() const noexcept {}
+    void on_work_finished() const noexcept {}
+    std::coroutine_handle<> dispatch(continuation& c) const
+    {
+        return c.h;
+    }
+    void post(continuation& c) const
+    {
+        capy::destroy(c.h);
+    }
+};
+
+// Hands the awaiting coroutine to a slot, then resumes it at once.
+struct record_handle
+{
+    std::coroutine_handle<>* slot;
+
+    bool await_ready() const noexcept { return false; }
+    std::coroutine_handle<>
+    await_suspend(std::coroutine_handle<> h, io_env const*) noexcept
+    {
+        *slot = h;
+        return h;
+    }
+    void await_resume() const noexcept {}
+};
+
+// Destroying its frame tears down another waiter, as a frame that owns
+// that waiter's chain does.
+struct destroys_other
+{
+    std::coroutine_handle<>* other;
+
+    ~destroys_other()
+    {
+        if(*other)
+            capy::destroy(std::exchange(*other, nullptr));
+    }
+};
+
+} // namespace
 
 struct async_event_test
 {
@@ -797,7 +855,7 @@ struct async_event_test
         pump(q);
         BOOST_TEST(slot);
 
-        slot.destroy();
+        capy::destroy(slot);
         BOOST_TEST_EQ(server_down, 1);
         BOOST_TEST_EQ(inner_down, 0);
         BOOST_TEST_EQ(q.size(), static_cast<std::size_t>(count));
@@ -811,7 +869,7 @@ struct async_event_test
         }
         while(!q.empty())
         {
-            q.front().destroy();
+            capy::destroy(q.front());
             q.pop();
         }
         BOOST_TEST_EQ(canceled, count / 2);
@@ -821,6 +879,134 @@ struct async_event_test
 
     // A waiter claimed by its stop request belongs to the executor's
     // queue: discarding it after the event is gone touches nothing.
+    // Posting a waiter can destroy it on the spot (here, a strand that
+    // can no longer run it); set() must not touch an event that the
+    // destroyed frame owned.
+    void testSetWhenPostDestroysOwner()
+    {
+        std::queue<std::coroutine_handle<>> q;
+        auto ctx = std::make_unique<closable_test_context>();
+        queuing_executor qe(q);
+        qe.ctx_ = ctx.get();
+        strand<queuing_executor> s{qe};
+        async_event* ev = nullptr;
+        int down = 0;
+        auto waiter = [](async_event*& out, destroy_count_t) -> task<void>
+        {
+            async_event e;
+            out = &e;
+            std::ignore = co_await e.wait();
+        };
+        run_async(s, std::allocator<std::byte>{})(
+            waiter(ev, destroy_count_t(down)));
+        pump(q);
+        BOOST_TEST(ev);
+        ctx->shutdown();
+        ev->set();
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // The same, with set() called from a destructor inside a teardown.
+    void testSetFromTeardownWhenPostDestroysOwner()
+    {
+        std::queue<std::coroutine_handle<>> q;
+        auto ctx = std::make_unique<closable_test_context>();
+        queuing_executor qe(q);
+        qe.ctx_ = ctx.get();
+        strand<queuing_executor> s{qe};
+        async_event* ev = nullptr;
+        int down = 0;
+        auto waiter = [](async_event*& out, destroy_count_t) -> task<void>
+        {
+            async_event e;
+            out = &e;
+            std::ignore = co_await e.wait();
+        };
+        run_async(s, std::allocator<std::byte>{})(
+            waiter(ev, destroy_count_t(down)));
+        pump(q);
+
+        struct set_on_exit
+        {
+            async_event** e;
+            ~set_on_exit() { (*e)->set(); }
+        };
+        std::coroutine_handle<> slot;
+        std::queue<std::coroutine_handle<>> q2;
+        auto notifier = [](async_event** e,
+            std::coroutine_handle<>* sl) -> task<void>
+        {
+            set_on_exit g{e};
+            co_await park_awaitable{sl};
+        };
+        run_async(queuing_executor(q2), std::allocator<std::byte>{})(
+            notifier(&ev, &slot));
+        pump(q2);
+        BOOST_TEST(slot);
+        ctx->shutdown();
+        capy::destroy(slot);
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // A post that destroys one claimed waiter can tear down another one
+    // set() has not posted yet; that waiter unlinks itself.
+    void testSetPostTearsDownOtherWaiter()
+    {
+        int down = 0;
+        std::coroutine_handle<> second;
+        std::queue<std::coroutine_handle<>> q;
+        auto first_waiter = [](async_event& x, std::coroutine_handle<>& o,
+            destroy_count_t) -> task<void>
+        {
+            destroys_other d{&o};
+            std::ignore = co_await x.wait();
+        };
+        auto second_waiter = [](async_event& x, std::coroutine_handle<>& s,
+            destroy_count_t) -> task<void>
+        {
+            co_await record_handle{&s};
+            std::ignore = co_await x.wait();
+        };
+        async_event e;
+        run_async(destroying_executor{}, std::allocator<std::byte>{})(
+            first_waiter(e, second, destroy_count_t(down)));
+        run_async(queuing_executor(q), std::allocator<std::byte>{})(
+            second_waiter(e, second, destroy_count_t(down)));
+        pump(q);
+        e.set();
+        pump(q);
+        BOOST_TEST_EQ(down, 2);
+    }
+
+    // The same teardown from the destructor's loop.
+    void testDestroyTearsDownOtherWaiter()
+    {
+        int down = 0;
+        std::coroutine_handle<> second;
+        std::queue<std::coroutine_handle<>> q;
+        auto first_waiter = [](async_event& x, std::coroutine_handle<>& o,
+            destroy_count_t) -> task<void>
+        {
+            destroys_other d{&o};
+            std::ignore = co_await x.wait();
+        };
+        auto second_waiter = [](async_event& x, std::coroutine_handle<>& s,
+            destroy_count_t) -> task<void>
+        {
+            co_await record_handle{&s};
+            std::ignore = co_await x.wait();
+        };
+        auto e = std::make_unique<async_event>();
+        run_async(destroying_executor{}, std::allocator<std::byte>{})(
+            first_waiter(*e, second, destroy_count_t(down)));
+        run_async(queuing_executor(q), std::allocator<std::byte>{})(
+            second_waiter(*e, second, destroy_count_t(down)));
+        pump(q);
+        e.reset();
+        pump(q);
+        BOOST_TEST_EQ(down, 2);
+    }
+
     void testStopClaimedWaiterOutlivesEvent()
     {
         auto p = std::make_unique<async_event>();
@@ -835,7 +1021,7 @@ struct async_event_test
         ss.request_stop();
         BOOST_TEST_EQ(q.size(), 1u);
         p.reset();
-        q.front().destroy();
+        capy::destroy(q.front());
         q.pop();
     }
 
@@ -843,6 +1029,10 @@ struct async_event_test
     run()
     {
         testStopClaimedWaiterOutlivesEvent();
+        testSetPostTearsDownOtherWaiter();
+        testDestroyTearsDownOtherWaiter();
+        testSetWhenPostDestroysOwner();
+        testSetFromTeardownWhenPostDestroysOwner();
         testDestroyEventCancelsWaiters();
         testCascadeCancelsManyWaiters();
         testInitialState();

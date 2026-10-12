@@ -12,10 +12,12 @@
 
 #include <boost/capy/concept/io_awaitable.hpp>
 #include <boost/capy/error.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/io_result.hpp>
 #include <boost/capy/ex/run_async.hpp>
+#include <boost/capy/ex/strand.hpp>
 #include <boost/capy/task.hpp>
 
 #include <memory>
@@ -36,6 +38,61 @@ namespace capy {
 
 static_assert(IoAwaitable<async_mutex::lock_awaiter>);
 static_assert(IoAwaitable<async_mutex::lock_guard_awaiter>);
+
+namespace {
+
+// Destroys what is posted to it, as a strand whose service shut down does.
+struct destroying_executor
+{
+    bool operator==(destroying_executor const&) const noexcept
+    {
+        return true;
+    }
+    test_io_context& context() const noexcept
+    {
+        return default_test_io_context();
+    }
+    void on_work_started() const noexcept {}
+    void on_work_finished() const noexcept {}
+    std::coroutine_handle<> dispatch(continuation& c) const
+    {
+        return c.h;
+    }
+    void post(continuation& c) const
+    {
+        capy::destroy(c.h);
+    }
+};
+
+// Hands the awaiting coroutine to a slot, then resumes it at once.
+struct record_handle
+{
+    std::coroutine_handle<>* slot;
+
+    bool await_ready() const noexcept { return false; }
+    std::coroutine_handle<>
+    await_suspend(std::coroutine_handle<> h, io_env const*) noexcept
+    {
+        *slot = h;
+        return h;
+    }
+    void await_resume() const noexcept {}
+};
+
+// Destroying its frame tears down another waiter, as a frame that owns
+// that waiter's chain does.
+struct destroys_other
+{
+    std::coroutine_handle<>* other;
+
+    ~destroys_other()
+    {
+        if(*other)
+            capy::destroy(std::exchange(*other, nullptr));
+    }
+};
+
+} // namespace
 
 struct async_mutex_test
 {
@@ -1039,6 +1096,128 @@ struct async_mutex_test
 
     // A waiter the destroyed mutex posted is still destroyed when its
     // execution context is torn down instead of run.
+    // A frame owning the mutex is torn down while it holds the lock:
+    // its guard hands the lock to a waiter, then the mutex dies, then
+    // the context's teardown destroys that waiter before it resumes.
+    void testOwnerTornDownWhileHoldingLock()
+    {
+        int down = 0;
+        std::coroutine_handle<> slot;
+        std::queue<std::coroutine_handle<>> q;
+        queuing_executor ex(q);
+        auto waiter = [](async_mutex& mx, destroy_count_t) -> task<void>
+        {
+            std::ignore = co_await mx.lock();
+        };
+        auto leaf = [](std::coroutine_handle<>* s) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto owner = [&]() -> task<void>
+        {
+            async_mutex m;
+            auto [ec, guard] = co_await m.scoped_lock();
+            run_async(ex)(waiter(m, destroy_count_t(down)));
+            run_async(ex)(waiter(m, destroy_count_t(down)));
+            co_await leaf(&slot);
+        };
+        run_async(ex, std::allocator<std::byte>{})(owner());
+        pump(q);
+        BOOST_TEST(slot);
+        capy::destroy(slot);
+        while(!q.empty())
+        {
+            capy::destroy(q.front());
+            q.pop();
+        }
+        BOOST_TEST_EQ(down, 2);
+    }
+
+    // Each granted waiter destroyed on the spot by its closed strand
+    // hands the lock on; that must not nest once per waiter.
+    // The granted waiter's frame owns the mutex, so the post that
+    // destroys it destroys the mutex while unlock() is still running.
+    void testUnlockWhenPostDestroysOwner()
+    {
+        std::queue<std::coroutine_handle<>> q;
+        auto ctx = std::make_unique<closable_test_context>();
+        queuing_executor qe(q);
+        qe.ctx_ = ctx.get();
+        strand<queuing_executor> s{qe};
+        async_mutex* mp = nullptr;
+        int down = 0;
+        auto waiter = [](async_mutex*& out, destroy_count_t) -> task<void>
+        {
+            async_mutex m;
+            out = &m;
+            std::ignore = co_await m.lock();
+            std::ignore = co_await m.lock();
+        };
+        run_async(s, std::allocator<std::byte>{})(
+            waiter(mp, destroy_count_t(down)));
+        pump(q);
+        BOOST_TEST(mp);
+        ctx->shutdown();
+        mp->unlock();
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    void testHandoffChainDoesNotRecurse()
+    {
+        constexpr int count = 100000;
+        std::queue<std::coroutine_handle<>> q;
+        auto ctx = std::make_unique<closable_test_context>();
+        queuing_executor qe(q);
+        qe.ctx_ = ctx.get();
+        strand<queuing_executor> s{qe};
+        async_mutex m;
+        BOOST_TEST(m.lock().await_ready());
+        int down = 0;
+        auto waiter = [](async_mutex& mx, destroy_count_t) -> task<void>
+        {
+            std::ignore = co_await mx.lock();
+            mx.unlock();
+        };
+        for(int i = 0; i < count; ++i)
+            run_async(s)(waiter(m, destroy_count_t(down)));
+        pump(q);
+        ctx->shutdown();
+        m.unlock();
+        BOOST_TEST_EQ(down, count);
+        BOOST_TEST(!m.is_locked());
+    }
+
+    // A post from the destructor that destroys one waiter can tear down
+    // another still queued; that waiter unlinks itself.
+    void testDestroyTearsDownOtherWaiter()
+    {
+        int down = 0;
+        std::coroutine_handle<> second;
+        std::queue<std::coroutine_handle<>> q;
+        auto first_waiter = [](async_mutex& x, std::coroutine_handle<>& o,
+            destroy_count_t) -> task<void>
+        {
+            destroys_other d{&o};
+            std::ignore = co_await x.lock();
+        };
+        auto second_waiter = [](async_mutex& x, std::coroutine_handle<>& s,
+            destroy_count_t) -> task<void>
+        {
+            co_await record_handle{&s};
+            std::ignore = co_await x.lock();
+        };
+        auto m = std::make_unique<async_mutex>();
+        BOOST_TEST(m->lock().await_ready());
+        run_async(destroying_executor{}, std::allocator<std::byte>{})(
+            first_waiter(*m, second, destroy_count_t(down)));
+        run_async(queuing_executor(q), std::allocator<std::byte>{})(
+            second_waiter(*m, second, destroy_count_t(down)));
+        pump(q);
+        m.reset();
+        pump(q);
+        BOOST_TEST_EQ(down, 2);
+    }
+
     void testCanceledWaiterDestroyedAtTeardown()
     {
         int down = 0;
@@ -1053,7 +1232,7 @@ struct async_mutex_test
         pump(q);
         m.reset();
         BOOST_TEST_EQ(q.size(), 1u);
-        q.front().destroy();
+        capy::destroy(q.front());
         q.pop();
         BOOST_TEST_EQ(down, 1);
     }
@@ -1074,7 +1253,7 @@ struct async_mutex_test
         pump(q);                 // waiter queued on the mutex
         m.unlock();              // hands the lock over, posts the waiter
         BOOST_TEST_EQ(q.size(), 1u);
-        q.front().destroy();     // torn down before it resumes
+        capy::destroy(q.front()); // torn down before it resumes
         q.pop();
         BOOST_TEST(!m.is_locked());
     }
@@ -1099,7 +1278,7 @@ struct async_mutex_test
         ss.request_stop();
         BOOST_TEST_EQ(q.size(), 1u);
         p.reset();
-        q.front().destroy();
+        capy::destroy(q.front());
         q.pop();
     }
 
@@ -1109,6 +1288,10 @@ struct async_mutex_test
         testStopClaimedWaiterOutlivesMutex();
         testDestroyMutexCancelsWaiters();
         testCanceledWaiterDestroyedAtTeardown();
+        testDestroyTearsDownOtherWaiter();
+        testHandoffChainDoesNotRecurse();
+        testUnlockWhenPostDestroysOwner();
+        testOwnerTornDownWhileHoldingLock();
         testHandoffToDestroyedWaiterUnlocks();
         testAcquireUnlocked();
         testContendedLock();

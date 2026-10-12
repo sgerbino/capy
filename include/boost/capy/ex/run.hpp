@@ -15,6 +15,7 @@
 #include <boost/capy/detail/run.hpp>
 #include <boost/capy/concept/executor.hpp>
 #include <boost/capy/concept/io_runnable.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <coroutine>
 #include <boost/capy/ex/frame_alloc_mixin.hpp>
@@ -81,7 +82,7 @@ struct reaper
         {
             // Before the parent: its chain may own the executor object.
             ex_.on_work_finished();
-            parent_.destroy();
+            capy::destroy(parent_);
         }
 
         reaper get_return_object() noexcept
@@ -128,7 +129,7 @@ post_reaper(executor_ref ex, std::coroutine_handle<> parent) noexcept
 struct boundary_trampoline
 {
     struct promise_type
-        : frame_alloc_mixin
+        : detail::process_frame_mixin
     {
         executor_ref caller_ex_;
         continuation parent_;

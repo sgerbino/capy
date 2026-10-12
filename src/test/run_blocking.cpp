@@ -9,6 +9,7 @@
 
 #include <boost/capy/test/run_blocking.hpp>
 
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <condition_variable>
 #include <mutex>
@@ -43,7 +44,7 @@ blocking_context::~blocking_context()
         {
             auto h = impl_->queue.front();
             impl_->queue.pop();
-            h.destroy();
+            capy::destroy(h);
         }
     };
     shutdown();

@@ -12,6 +12,7 @@
 
 #include <boost/capy/buffers/make_buffer.hpp>
 #include <boost/capy/error.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/ex/run_async.hpp>
@@ -373,6 +374,29 @@ public:
         test_executor ex(n);
         run_async(ex)(parent(destroy_count_t(parent_down)));
         BOOST_TEST(slot);
+        capy::destroy(slot);
+        BOOST_TEST_EQ(parent_down, 1);
+    }
+
+    // A holder destroying the parked write with a raw destroy() still
+    // destroys the chain once: the op frees its own frame before the
+    // parent, which owns that frame's memory, is destroyed.
+    void
+    testRawTeardownOfParkedWrite()
+    {
+        int parent_down = 0;
+        std::coroutine_handle<> slot;
+        parking_stream s{&slot};
+        auto parent = [&](destroy_count_t) -> task<void>
+        {
+            write_now wn(s);
+            char c = 'x';
+            std::ignore = co_await wn(const_buffer(&c, 1));
+        };
+        int n = 0;
+        test_executor ex(n);
+        run_async(ex)(parent(destroy_count_t(parent_down)));
+        BOOST_TEST(slot);
         slot.destroy();
         BOOST_TEST_EQ(parent_down, 1);
     }
@@ -439,7 +463,7 @@ public:
         BOOST_TEST_EQ(first, 1u);
         BOOST_TEST_EQ(parent_down, 0);
         BOOST_TEST(slot);
-        slot.destroy();
+        capy::destroy(slot);
         BOOST_TEST_EQ(parent_down, 1);
     }
 
@@ -447,6 +471,7 @@ public:
     run()
     {
         testTeardownOfParkedWriteDestroysChainOnce();
+        testRawTeardownOfParkedWrite();
 #if !defined(_WIN32)
         testDestroyParentAwaitingWriteTerminates();
 #endif

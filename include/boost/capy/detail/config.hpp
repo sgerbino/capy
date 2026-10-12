@@ -139,6 +139,17 @@
 #define BOOST_CAPY_CORO_AWAIT_ELIDABLE
 #endif
 
+#if defined(_MSC_VER) && !defined(__clang__)
+# define BOOST_CAPY_NOINLINE __declspec(noinline)
+# define BOOST_CAPY_COLD
+#elif defined(__GNUC__) || defined(__clang__)
+# define BOOST_CAPY_NOINLINE __attribute__((noinline))
+# define BOOST_CAPY_COLD __attribute__((cold))
+#else
+# define BOOST_CAPY_NOINLINE
+# define BOOST_CAPY_COLD
+#endif
+
 namespace boost::capy::detail {
 inline constexpr unsigned max_iovec_ = 16;
 }

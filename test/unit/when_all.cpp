@@ -12,6 +12,7 @@
 
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/strand.hpp>
 #include <boost/capy/ex/thread_pool.hpp>
@@ -1222,12 +1223,12 @@ struct when_all_io_result_test
         q.pop();
         BOOST_TEST_EQ(q.size(), 2u);
 
-        q.front().destroy();
+        capy::destroy(q.front());
         q.pop();
         BOOST_TEST_EQ(a_down, 1);
         BOOST_TEST_EQ(parent_down, 0);
 
-        q.front().destroy();
+        capy::destroy(q.front());
         q.pop();
         BOOST_TEST_EQ(b_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
@@ -1257,10 +1258,10 @@ struct when_all_io_result_test
             run_async(ex)(parent(destroy_count_t(parent_down)));
         }
         BOOST_TEST(sa && sb);
-        sa.destroy();
+        capy::destroy(sa);
         BOOST_TEST_EQ(a_down, 1);
         BOOST_TEST_EQ(parent_down, 0); // b still holds a share
-        sb.destroy();
+        capy::destroy(sb);
         BOOST_TEST_EQ(b_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
     }
@@ -1287,7 +1288,7 @@ struct when_all_io_result_test
             test_executor ex(n);
             run_async(ex)(parent(destroy_count_t(parent_down)));
         }
-        sa.destroy();
+        capy::destroy(sa);
         sb.resume();
         BOOST_TEST(!resumed);
         BOOST_TEST_EQ(parent_down, 1);
@@ -1316,8 +1317,8 @@ struct when_all_io_result_test
         test_executor ex(n);
         run_async(ex, std::allocator<std::byte>{})(
             parent(&sa, &sb, destroy_count_t(parent_down)));
-        sa.destroy();
-        sb.destroy();
+        capy::destroy(sa);
+        capy::destroy(sb);
         BOOST_TEST_EQ(parent_down, 1);
     }
 
@@ -1345,9 +1346,9 @@ struct when_all_io_result_test
             run_async(ex)(parent());
         }
         BOOST_TEST(!seen.stop_requested());
-        sa.destroy();
+        capy::destroy(sa);
         BOOST_TEST(seen.stop_requested());
-        sb.destroy();
+        capy::destroy(sb);
     }
 
     void

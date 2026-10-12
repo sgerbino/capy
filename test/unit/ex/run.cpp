@@ -11,6 +11,7 @@
 #include <boost/capy/ex/run.hpp>
 
 #include <boost/capy/concept/io_awaitable.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
@@ -623,7 +624,7 @@ struct run_test
         BOOST_TEST(slot);
         BOOST_TEST_EQ(work, 2); // run_async's guard and run(ex)'s hold
 
-        slot.destroy();
+        capy::destroy(slot);
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(parent_down, 0); // not inline: queued on caller
         BOOST_TEST_EQ(q.size(), 1u);
@@ -631,6 +632,63 @@ struct run_test
         pump(q);
         BOOST_TEST_EQ(parent_down, 1);
         BOOST_TEST_EQ(work, 0);
+    }
+
+    // A caller whose context is shut down destroys the reaper as it is
+    // posted, destroying the parent chain and the allocator its root
+    // frame holds; the boundary frame must not be freed into it after.
+    void testReaperDestroyedInlineWithValueAllocator()
+    {
+        struct closing_executor
+        {
+            std::queue<std::coroutine_handle<>>* q_;
+            bool* closed_;
+
+            bool operator==(closing_executor const& o) const noexcept
+            {
+                return q_ == o.q_;
+            }
+            test_io_context& context() const noexcept
+            {
+                return default_test_io_context();
+            }
+            void on_work_started() const noexcept {}
+            void on_work_finished() const noexcept {}
+            std::coroutine_handle<> dispatch(continuation& c) const
+            {
+                post(c);
+                return std::noop_coroutine();
+            }
+            void post(continuation& c) const
+            {
+                if(*closed_)
+                    capy::destroy(c.h);
+                else
+                    q_->push(c.h);
+            }
+        };
+        std::queue<std::coroutine_handle<>> q;
+        bool closed = false;
+        int child_down = 0, parent_down = 0, n = 0;
+        std::coroutine_handle<> slot;
+        closing_executor caller{&q, &closed};
+        test_executor inner(n);
+        auto child = [](std::coroutine_handle<>* s, destroy_count_t) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto parent = [&](destroy_count_t) -> task<void>
+        {
+            co_await capy::run(inner)(child(&slot, destroy_count_t(child_down)));
+        };
+        run_async(caller, std::allocator<std::byte>{})(
+            parent(destroy_count_t(parent_down)));
+        pump(q);
+        BOOST_TEST(slot);
+        closed = true;
+        capy::destroy(slot);
+        BOOST_TEST_EQ(child_down, 1);
+        BOOST_TEST_EQ(parent_down, 1);
     }
 
     // A caller context that drains the reaper instead of running it
@@ -652,9 +710,9 @@ struct run_test
         };
         run_async(caller)(parent(destroy_count_t(parent_down)));
         pump(q);
-        slot.destroy();
+        capy::destroy(slot);
         BOOST_TEST_EQ(q.size(), 1u);
-        q.front().destroy();
+        capy::destroy(q.front());
         q.pop();
         BOOST_TEST_EQ(parent_down, 1);
     }
@@ -710,7 +768,7 @@ struct run_test
         pump(q);
         slot.resume();
         BOOST_TEST_EQ(q.size(), 1u);
-        q.front().destroy();
+        capy::destroy(q.front());
         q.pop();
         BOOST_TEST_EQ(parent_down, 1);
         BOOST_TEST_EQ(work, 0);
@@ -843,6 +901,7 @@ struct run_test
     void
     run()
     {
+        testReaperDestroyedInlineWithValueAllocator();
         testCustomTaskType();
         testCustomTaskTypeVoid();
         testExWithStopToken();

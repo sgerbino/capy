@@ -285,6 +285,28 @@ struct execution_context_test
         BOOST_TEST(shutdown_called);
     }
 
+    // A service created after its context shut down starts shut down,
+    // so it never holds work that its context can no longer run.
+    void
+    testServiceAfterShutdownStartsShutDown()
+    {
+        bool made = false;
+        bool used = false;
+        closable_test_context ctx;
+        ctx.shutdown();
+        ctx.make_service<tracking_service>(made);
+        BOOST_TEST(made);
+        static bool* used_flag;
+        used_flag = &used;
+        struct used_service : execution_context::service
+        {
+            explicit used_service(execution_context&) {}
+            void shutdown() override { *used_flag = true; }
+        };
+        ctx.use_service<used_service>();
+        BOOST_TEST(used);
+    }
+
     void
     testMultipleServices()
     {
@@ -438,6 +460,7 @@ struct execution_context_test
     void
     run()
     {
+        testServiceAfterShutdownStartsShutDown();
         testConstruct();
         testHasService();
         testFindService();

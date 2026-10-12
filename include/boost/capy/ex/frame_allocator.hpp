@@ -41,7 +41,7 @@ namespace detail {
 // frame across a suspension, so a resumption on another thread
 // would write the first thread's slot.
 #if BOOST_CAPY_WORKAROUND(_MSC_VER, >= 1) && !defined(__clang__)
-__declspec(noinline)
+BOOST_CAPY_NOINLINE
 #endif
 inline std::pmr::memory_resource*&
 current_frame_allocator_ref() noexcept

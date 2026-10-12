@@ -18,6 +18,7 @@
 #include <boost/capy/concept/io_awaitable.hpp>
 #include <coroutine>
 #include <boost/capy/ex/executor_ref.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/frame_alloc_mixin.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/io_env.hpp>
@@ -151,18 +152,13 @@ struct when_any_core
     // then destroyed rather than resumed.
     std::atomic<bool> lost_{false};
 
-    /** Drop a share held by a runner that never finished.
-
-        @param recorder The address of the runner promise being
-        destroyed, whose frame frees before the parent is destroyed.
-    */
-    void lose_branch(void const* recorder) noexcept
+    /// Drop a share held by a runner that never finished.
+    void lose_branch() noexcept
     {
         lost_.store(true, std::memory_order_relaxed);
         stop_source_.request_stop();
         if(remaining_count_.fetch_sub(1, std::memory_order_acq_rel) == 1)
-            detail::destroy_after_free(
-                std::exchange(continuation_.h, nullptr), recorder);
+            detail::destroy_parent(std::exchange(continuation_.h, nullptr));
     }
 
     // Placed last to avoid padding (1-byte atomic followed by 8-byte aligned members)
@@ -244,7 +240,7 @@ template<typename StateType>
 struct when_any_io_runner
 {
     struct promise_type
-        : frame_alloc_mixin
+        : detail::process_frame_mixin
     {
         StateType* state_ = nullptr;
         std::size_t index_ = 0;
@@ -254,7 +250,7 @@ struct when_any_io_runner
         ~promise_type()
         {
             if(!done_ && state_)
-                state_->core_.lose_branch(this);
+                state_->core_.lose_branch();
         }
 
         when_any_io_runner get_return_object() noexcept
@@ -287,7 +283,7 @@ struct when_any_io_runner
                         return detail::symmetric_transfer(std::noop_coroutine());
                     if(lost->load(std::memory_order_relaxed))
                     {
-                        std::exchange(cont.h, nullptr).destroy();
+                        capy::destroy(std::exchange(cont.h, nullptr));
                         return detail::symmetric_transfer(std::noop_coroutine());
                     }
                     return detail::symmetric_transfer(caller_env->executor.dispatch(cont));

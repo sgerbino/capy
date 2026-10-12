@@ -15,6 +15,7 @@
 #include <boost/capy/concept/executor.hpp>
 #include <coroutine>
 #include <boost/capy/ex/execution_context.hpp>
+#include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/task.hpp>
 
@@ -162,6 +163,13 @@ test_executor::context() const noexcept
 
 static_assert(Executor<test_executor>);
 static_assert(ExecutionContext<test_io_context>);
+
+/// A test context whose services the test shuts down directly.
+class closable_test_context : public test_io_context
+{
+public:
+    using execution_context::shutdown;
+};
 
 
 //----------------------------------------------------------
@@ -527,7 +535,7 @@ pump(std::queue<std::coroutine_handle<>>& q)
     {
         auto h = q.front();
         q.pop();
-        h.resume();
+        safe_resume(h);
     }
 }
 

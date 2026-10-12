@@ -84,10 +84,11 @@ namespace capy {
     A type awaited through @ref run or the combinators must also take
     part in the ownership protocol:
 
-    @li If the coroutine is destroyed before completing, its stored
-        continuation is destroyed no earlier than the deallocation of
-        this frame. Deriving from @ref io_awaitable_promise_base
-        provides this.
+    @li If the coroutine is destroyed before completing, it destroys
+        its stored continuation, after this frame is deallocated when
+        a holder destroys it with @ref destroy. Deriving from
+        @ref io_awaitable_promise_base provides this; a promise with
+        its own `operator delete` needs nothing more.
     @li Its `await_suspend` registers the awaiting object as owner of
         the frame, and `await_resume` clears it, or the type otherwise
         guarantees the frame is destroyed exactly once.

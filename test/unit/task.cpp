@@ -10,6 +10,7 @@
 // Test that header file is self-contained.
 #include <boost/capy/task.hpp>
 
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/io_env.hpp>
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
@@ -1373,7 +1374,7 @@ struct task_test
         run_async(ex, std::allocator<std::byte>{})(
             parent(&slot, destroy_count_t(parent_down)));
         BOOST_TEST(slot);
-        slot.destroy();
+        capy::destroy(slot);
         BOOST_TEST_EQ(parent_down, 1);
     }
 
@@ -1404,7 +1405,7 @@ struct task_test
         run_async(ex, std::allocator<std::byte>{})(
             parent(&slot, destroy_count_t(parent_down)));
         BOOST_TEST(slot);
-        slot.destroy();
+        capy::destroy(slot);
         BOOST_TEST_EQ(parent_down, 1);
     }
 

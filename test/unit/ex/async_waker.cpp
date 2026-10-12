@@ -11,12 +11,17 @@
 #include <boost/capy/ex/async_waker.hpp>
 
 #include <boost/capy/cond.hpp>
+#include <boost/capy/ex/destroy.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/thread_pool.hpp>
 #include <boost/capy/task.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <memory>
+#include <mutex>
 #include <queue>
 #include <stop_token>
 #include <thread>
@@ -26,6 +31,96 @@
 
 namespace boost {
 namespace capy {
+
+namespace {
+
+// One thread that resumes what is posted to it, and reports when it
+// has nothing left to run.
+class worker
+{
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<std::coroutine_handle<>> q_;
+    bool running_ = false;
+    bool stop_ = false;
+    std::thread t_;
+
+    void loop()
+    {
+        std::unique_lock<std::mutex> lk(m_);
+        for(;;)
+        {
+            cv_.wait(lk, [&]{ return stop_ || !q_.empty(); });
+            if(q_.empty())
+                return;
+            auto h = q_.front();
+            q_.pop_front();
+            running_ = true;
+            lk.unlock();
+            h.resume();
+            lk.lock();
+            running_ = false;
+        }
+    }
+
+public:
+    ~worker()
+    {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            stop_ = true;
+        }
+        cv_.notify_one();
+        t_.join();
+    }
+
+    worker()
+        : t_([this]{ loop(); })
+    {
+    }
+
+    bool idle()
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        return q_.empty() && !running_;
+    }
+
+    void push(std::coroutine_handle<> h)
+    {
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            q_.push_back(h);
+        }
+        cv_.notify_one();
+    }
+};
+
+struct worker_executor
+{
+    worker* w_;
+
+    bool operator==(worker_executor const& o) const noexcept
+    {
+        return w_ == o.w_;
+    }
+    test_io_context& context() const noexcept
+    {
+        return default_test_io_context();
+    }
+    void on_work_started() const noexcept {}
+    void on_work_finished() const noexcept {}
+    std::coroutine_handle<> dispatch(continuation& c) const
+    {
+        w_->push(c.h);
+        return std::noop_coroutine();
+    }
+    void post(continuation& c) const
+    {
+        w_->push(c.h);
+    }
+};
+
+} // namespace
 
 struct async_waker_test
 {
@@ -282,6 +377,116 @@ struct async_waker_test
 
     // The waiter's stop callback reaches into the waker, so a stop
     // requested after the waker is gone must find it deregistered.
+    // A stop requested while the waiter is suspending is never lost:
+    // either the stop callback or the waiter's own re-check cancels it.
+    void testStopRacesWait()
+    {
+        thread_pool pool(1);
+        async_waker w;
+        std::atomic<int> done{0};
+        auto waiter = [](async_waker& x, std::atomic<int>& d,
+            std::atomic<bool>& en) -> task<void>
+        {
+            en.store(true);
+            std::ignore = co_await x.wait();
+            d.fetch_add(1);
+        };
+        for(int i = 0; i < 2000; ++i)
+        {
+            std::stop_source ss;
+            std::atomic<bool> entered{false};
+            run_async(pool.get_executor(), ss.get_token(),
+                std::allocator<std::byte>{})(waiter(w, done, entered));
+            while(!entered.load())
+                std::this_thread::yield();
+            ss.request_stop();
+            // Only a watchdog: a lost cancel never completes.
+            auto const limit = std::chrono::steady_clock::now() +
+                std::chrono::seconds(30);
+            while(done.load() != i + 1 &&
+                std::chrono::steady_clock::now() < limit)
+                std::this_thread::yield();
+            if(!BOOST_TEST_EQ(done.load(), i + 1))
+                break;
+        }
+        pool.join();
+    }
+
+    // A woken waiter torn down before it resumes, then the waker.
+    void testWokenWaiterDestroyedThenWakerDestroyed()
+    {
+        int down = 0;
+        auto p = std::make_unique<async_waker>();
+        std::queue<std::coroutine_handle<>> q;
+        auto waiter = [](async_waker& x, destroy_count_t) -> task<void>
+        {
+            std::ignore = co_await x.wait();
+        };
+        run_async(queuing_executor(q), std::allocator<std::byte>{})(
+            waiter(*p, destroy_count_t(down)));
+        pump(q);
+        p->wake();
+        BOOST_TEST_EQ(q.size(), 1u);
+        capy::destroy(q.front());
+        q.pop();
+        p.reset();
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // The waker may die on the waking thread right after wake(), while
+    // the waiter resumes on its own thread.
+    void testWakerDestroyedWhileWokenWaiterResumes()
+    {
+        worker wk;
+        worker_executor ex{&wk};
+        for(int i = 0; i < 300; ++i)
+        {
+            auto* w = new async_waker;
+            std::atomic<bool> entered{false};
+            std::atomic<bool> done{false};
+            auto waiter = [](async_waker& x, std::atomic<bool>& en,
+                std::atomic<bool>& d) -> task<void>
+            {
+                en.store(true);
+                std::ignore = co_await x.wait();
+                d.store(true);
+            };
+            run_async(ex, std::allocator<std::byte>{})(
+                waiter(*w, entered, done));
+            // Entered and then idle: suspended on the waker.
+            while(!entered.load() || !wk.idle())
+                std::this_thread::yield();
+            w->wake();
+            delete w;
+            while(!done.load())
+                std::this_thread::yield();
+        }
+    }
+
+    // A stop requested after the waker that woke the waiter is gone
+    // finds no callback reaching into it.
+    void testStopAfterWakeAndWakerDestroyed()
+    {
+        std::error_code ec = make_error_code(error::canceled);
+        auto w = std::make_unique<async_waker>();
+        std::stop_source ss;
+        auto waiter = [](async_waker& wk, std::error_code& out) -> task<void>
+        {
+            auto [e] = co_await wk.wait();
+            out = e;
+        };
+        std::queue<std::coroutine_handle<>> q;
+        run_async(queuing_executor(q), ss.get_token(),
+            std::allocator<std::byte>{})(waiter(*w, ec));
+        pump(q);
+        w->wake();
+        BOOST_TEST_EQ(q.size(), 1u);
+        w.reset();
+        ss.request_stop();
+        pump(q);
+        BOOST_TEST(!ec);
+    }
+
     void testStopAfterWakerDestroyed()
     {
         std::error_code ec;
@@ -318,7 +523,7 @@ struct async_waker_test
         ss.request_stop();
         BOOST_TEST_EQ(q.size(), 1u);
         p.reset();
-        q.front().destroy();
+        capy::destroy(q.front());
         q.pop();
     }
 
@@ -336,7 +541,7 @@ struct async_waker_test
         p->wake();
         BOOST_TEST_EQ(q.size(), 1u);
         p.reset();
-        q.front().destroy();
+        capy::destroy(q.front());
         q.pop();
     }
 
@@ -346,6 +551,10 @@ struct async_waker_test
         testWakeClaimedWaiterOutlivesWaker();
         testDestroyWakerCancelsWaiter();
         testStopAfterWakerDestroyed();
+        testStopAfterWakeAndWakerDestroyed();
+        testWokenWaiterDestroyedThenWakerDestroyed();
+        testStopRacesWait();
+        testWakerDestroyedWhileWokenWaiterResumes();
         testLatchedTokenBeforeWait();
         testWakeAfterWaitResumes();
         testCrossThreadWake();
