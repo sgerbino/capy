@@ -23,9 +23,19 @@
 #include <boost/capy/ex/thread_pool.hpp>
 #include <boost/capy/test/run_blocking.hpp>
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <csignal>
+#endif
+
 #include <latch>
 #include <memory>
+#include <queue>
+#include <stdexcept>
 #include <thread>
+#include <tuple>
 
 namespace boost {
 namespace capy {
@@ -36,6 +46,39 @@ static_assert(IoAwaitable<detail::run_awaitable<task<void>, true>>);
 static_assert(IoAwaitable<detail::run_awaitable<task<int>, true>>);
 
 using test::custom_task;
+
+// Destroys its frame even while lent, as a non-conforming IoRunnable
+// may.
+struct lax_task : custom_task<void>
+{
+    explicit lax_task(custom_task<void>&& t) noexcept
+        : custom_task<void>(std::move(t))
+    {
+    }
+
+    lax_task(lax_task&&) noexcept = default;
+
+    ~lax_task()
+    {
+        if(auto h = handle())
+        {
+            release();
+            h.destroy();
+        }
+    }
+};
+
+static_assert(IoRunnable<lax_task>);
+
+// custom_task passes no environment to what it awaits.
+struct park_plain
+{
+    std::coroutine_handle<>* slot;
+
+    bool await_ready() const noexcept { return false; }
+    void await_suspend(std::coroutine_handle<> h) noexcept { *slot = h; }
+    void await_resume() const noexcept {}
+};
 
 // Test allocator that wraps std::allocator
 template<class T>
@@ -531,6 +574,272 @@ struct run_test
         compute_pool.join();
     }
 
+    // Executor that queues posts and counts outstanding work.
+    struct counting_queue_executor
+    {
+        std::queue<std::coroutine_handle<>>* q_;
+        int* work_;
+
+        bool operator==(counting_queue_executor const& o) const noexcept
+        {
+            return q_ == o.q_;
+        }
+        test_io_context& context() const noexcept
+        {
+            return default_test_io_context();
+        }
+        void on_work_started() const noexcept { ++*work_; }
+        void on_work_finished() const noexcept { --*work_; }
+        std::coroutine_handle<> dispatch(continuation& c) const
+        {
+            q_->push(c.h);
+            return std::noop_coroutine();
+        }
+        void post(continuation& c) const
+        {
+            q_->push(c.h);
+        }
+    };
+
+    // Tearing down the inner chain posts the parent's destruction to
+    // the caller's executor; running it destroys the parent there.
+    void testInnerTeardownReapsParentOnCallerExecutor()
+    {
+        std::queue<std::coroutine_handle<>> q;
+        int work = 0, child_down = 0, parent_down = 0, n = 0;
+        std::coroutine_handle<> slot;
+        counting_queue_executor caller{&q, &work};
+        test_executor inner(n);
+        auto child = [](std::coroutine_handle<>* s, destroy_count_t) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto parent = [&](destroy_count_t) -> task<void>
+        {
+            co_await capy::run(inner)(child(&slot, destroy_count_t(child_down)));
+        };
+        run_async(caller)(parent(destroy_count_t(parent_down)));
+        pump(q);
+        BOOST_TEST(slot);
+        BOOST_TEST_EQ(work, 2); // run_async's guard and run(ex)'s hold
+
+        slot.destroy();
+        BOOST_TEST_EQ(child_down, 1);
+        BOOST_TEST_EQ(parent_down, 0); // not inline: queued on caller
+        BOOST_TEST_EQ(q.size(), 1u);
+
+        pump(q);
+        BOOST_TEST_EQ(parent_down, 1);
+        BOOST_TEST_EQ(work, 0);
+    }
+
+    // A caller context that drains the reaper instead of running it
+    // still destroys the parent.
+    void testDrainedReaperDestroysParent()
+    {
+        std::queue<std::coroutine_handle<>> q;
+        int work = 0, parent_down = 0, n = 0;
+        std::coroutine_handle<> slot;
+        counting_queue_executor caller{&q, &work};
+        test_executor inner(n);
+        auto child = [](std::coroutine_handle<>* s) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto parent = [&](destroy_count_t) -> task<void>
+        {
+            co_await capy::run(inner)(child(&slot));
+        };
+        run_async(caller)(parent(destroy_count_t(parent_down)));
+        pump(q);
+        slot.destroy();
+        BOOST_TEST_EQ(q.size(), 1u);
+        q.front().destroy();
+        q.pop();
+        BOOST_TEST_EQ(parent_down, 1);
+    }
+
+    // run(ex) holds work on the caller's executor until the parent is
+    // resumed.
+    void testRunHoldsCallerWork()
+    {
+        std::queue<std::coroutine_handle<>> q;
+        int work = 0, n = 0;
+        std::coroutine_handle<> slot;
+        counting_queue_executor caller{&q, &work};
+        test_executor inner(n);
+        auto child = [](std::coroutine_handle<>* s) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto parent = [&]() -> task<void>
+        {
+            co_await capy::run(inner)(child(&slot));
+        };
+        run_async(caller)(parent());
+        pump(q);
+        BOOST_TEST_EQ(work, 2);
+        slot.resume();          // child finishes, parent posted
+        BOOST_TEST_EQ(work, 2); // still held while the parent is queued
+        BOOST_TEST_EQ(q.size(), 1u);
+        q.front().resume();     // parent resumes, run(ex) releases
+        q.pop();
+        BOOST_TEST_EQ(work, 0);
+        pump(q);
+        BOOST_TEST_EQ(work, 0);
+    }
+
+    // A caller context that drains the parent instead of resuming it
+    // still releases run(ex)'s hold.
+    void testDrainedParentReleasesWork()
+    {
+        std::queue<std::coroutine_handle<>> q;
+        int work = 0, parent_down = 0, n = 0;
+        std::coroutine_handle<> slot;
+        counting_queue_executor caller{&q, &work};
+        test_executor inner(n);
+        auto child = [](std::coroutine_handle<>* s) -> task<void>
+        {
+            co_await park_awaitable{s};
+        };
+        auto parent = [&](destroy_count_t) -> task<void>
+        {
+            co_await capy::run(inner)(child(&slot));
+        };
+        run_async(caller)(parent(destroy_count_t(parent_down)));
+        pump(q);
+        slot.resume();
+        BOOST_TEST_EQ(q.size(), 1u);
+        q.front().destroy();
+        q.pop();
+        BOOST_TEST_EQ(parent_down, 1);
+        BOOST_TEST_EQ(work, 0);
+    }
+
+    struct throwing_post_executor
+    {
+        bool operator==(throwing_post_executor const&) const noexcept
+        {
+            return true;
+        }
+        test_io_context& context() const noexcept
+        {
+            return default_test_io_context();
+        }
+        void on_work_started() const noexcept {}
+        void on_work_finished() const noexcept {}
+        std::coroutine_handle<> dispatch(continuation&) const
+        {
+            throw std::runtime_error("dispatch");
+        }
+        void post(continuation&) const
+        {
+            throw std::runtime_error("post");
+        }
+    };
+
+    // An executor refusing the task leaves the awaiting coroutine to
+    // handle the error with nothing lent and no work held on its own
+    // executor.
+    void testRunExPostThrows()
+    {
+        std::queue<std::coroutine_handle<>> q;
+        int work = 0, child_down = 0;
+        bool caught = false;
+        counting_queue_executor caller{&q, &work};
+        io_env env{executor_ref(caller), {}, nullptr};
+        auto child = [](destroy_count_t) -> task<void> { co_return; };
+        {
+            auto aw = capy::run(throwing_post_executor{})(
+                child(destroy_count_t(child_down)));
+            try
+            {
+                std::ignore = aw.await_suspend(std::noop_coroutine(), &env);
+            }
+            catch(std::runtime_error const&)
+            {
+                caught = true;
+            }
+            BOOST_TEST_EQ(work, 0);
+            BOOST_TEST_EQ(child_down, 0);
+        }
+        BOOST_TEST(caught);
+        BOOST_TEST_EQ(child_down, 1);
+        BOOST_TEST(q.empty());
+    }
+
+#if !defined(_WIN32)
+    // Runs fn in a child process; true when the child terminated
+    // abnormally (std::terminate raises SIGABRT).
+    template<class F>
+    static bool
+    terminates(F fn)
+    {
+        pid_t pid = ::fork();
+        if(pid == 0)
+        {
+            // Keep the terminate banner out of the suite's output.
+            int fd = ::open("/dev/null", O_WRONLY);
+            if(fd >= 0)
+                ::dup2(fd, 2);
+            fn();
+            ::_exit(0);
+        }
+        int status = 0;
+        ::waitpid(pid, &status, 0);
+        return WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT;
+    }
+
+    // Start a parent by hand without lending it, so destroying its
+    // task object destroys it from above.
+    template<class F>
+    static void
+    destroy_from_above(F parent)
+    {
+        int n = 0;
+        test_executor caller(n);
+        io_env env{executor_ref(caller), {}, nullptr};
+        auto t = parent();
+        t.handle().promise().set_environment(&env);
+        t.handle().resume();
+    }
+
+    // Destroying a parent from above while run(ex) has its task lent
+    // terminates, whatever the task type does when destroyed.
+    void testDestroyParentAwaitingRunExTerminates()
+    {
+        BOOST_TEST(terminates([] {
+            std::coroutine_handle<> slot;
+            int n = 0;
+            test_executor inner(n);
+            auto child = [](std::coroutine_handle<>* s) -> custom_task<void>
+            {
+                co_await park_plain{s};
+            };
+            destroy_from_above([&]() -> task<void>
+            {
+                co_await capy::run(inner)(lax_task(child(&slot)));
+            });
+        }));
+    }
+
+    void testDestroyParentAwaitingRunTerminates()
+    {
+        BOOST_TEST(terminates([] {
+            std::coroutine_handle<> slot;
+            auto child = [](std::coroutine_handle<>* s) -> custom_task<void>
+            {
+                co_await park_plain{s};
+            };
+            destroy_from_above([&]() -> task<void>
+            {
+                co_await capy::run(std::stop_token{})(
+                    lax_task(child(&slot)));
+            });
+        }));
+    }
+#endif
+
     void
     run()
     {
@@ -555,6 +864,15 @@ struct run_test
         testAllocatorPropagationThroughRun();
         testRunExStrandFirstInstruction();
         testHopsBackToIoThread();
+        testInnerTeardownReapsParentOnCallerExecutor();
+        testDrainedReaperDestroysParent();
+        testRunHoldsCallerWork();
+        testDrainedParentReleasesWork();
+        testRunExPostThrows();
+#if !defined(_WIN32)
+        testDestroyParentAwaitingRunExTerminates();
+        testDestroyParentAwaitingRunTerminates();
+#endif
     }
 };
 

@@ -21,6 +21,7 @@
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/io_env.hpp>
 
+#include <exception>
 #include <memory_resource>
 #include <stop_token>
 #include <type_traits>
@@ -60,6 +61,57 @@
 
 namespace boost::capy::detail {
 
+/** Coroutine that owns a parent destroyed across an executor boundary.
+
+    Its promise destroys the parent, so the parent is destroyed on the
+    caller's executor whether that executor runs the reaper or drains
+    it. It also releases the work that `run` holds on that executor.
+    Allocated with plain `new`: the frame allocator in scope may
+    belong to a context being torn down.
+*/
+struct reaper
+{
+    struct promise_type
+    {
+        executor_ref ex_;
+        std::coroutine_handle<> parent_;
+        continuation self_;
+
+        ~promise_type()
+        {
+            // Before the parent: its chain may own the executor object.
+            ex_.on_work_finished();
+            parent_.destroy();
+        }
+
+        reaper get_return_object() noexcept
+        {
+            return reaper{
+                std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_never final_suspend() noexcept { return {}; }
+        void return_void() noexcept {}
+        void unhandled_exception() noexcept { std::terminate(); } // LCOV_EXCL_LINE body cannot throw
+    };
+
+    std::coroutine_handle<promise_type> h_;
+};
+
+inline reaper make_reaper() { co_return; }
+
+// noexcept: a failed allocation terminates.
+inline void
+post_reaper(executor_ref ex, std::coroutine_handle<> parent) noexcept
+{
+    auto h = make_reaper().h_;
+    h.promise().ex_ = ex;
+    h.promise().parent_ = parent;
+    h.promise().self_.h = h;
+    ex.post(h.promise().self_);
+}
+
 /** Minimal coroutine that dispatches through the caller's executor.
 
     Sits between the inner task and the parent when executors
@@ -68,7 +120,10 @@ namespace boost::capy::detail {
     `final_suspend` dispatches the parent through the caller's
     executor to restore the correct execution context.
 
-    The trampoline never touches the task's result.
+    The trampoline never touches the task's result. If the inner task
+    is destroyed before it completes, the trampoline posts the parent's
+    destruction to the caller's executor. The caller's execution context
+    must outlive that post.
 */
 struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE boundary_trampoline
 {
@@ -79,14 +134,16 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE boundary_trampoline
         continuation parent_;
         // The awaitable's trampoline object until this completes. A
         // frame destroyed before then was destroyed by the inner task
-        // being torn down; the parent is left alone, since it may belong
-        // to a context that is already gone.
+        // being torn down; the parent is destroyed on its own executor.
         boundary_trampoline* owner_ = nullptr;
 
         ~promise_type()
         {
             if(owner_)
+            {
                 owner_->h_ = nullptr;
+                post_reaper(caller_ex_, std::exchange(parent_.h, nullptr));
+            }
         }
 
         boundary_trampoline get_return_object() noexcept
@@ -107,6 +164,8 @@ struct BOOST_CAPY_CORO_DESTROY_WHEN_COMPLETE boundary_trampoline
                 auto await_suspend(
                     std::coroutine_handle<>) noexcept
                 {
+                    // The parent may run and destroy this frame before
+                    // post returns, so nothing here touches p_ after it.
                     p_->owner_ = nullptr;
                     p_->caller_ex_.post(p_->parent_);
                     return detail::symmetric_transfer(
@@ -193,7 +252,21 @@ struct [[nodiscard]] run_awaitable_ex
     io_env env_;
     boundary_trampoline tr_;
     continuation task_cont_;
+    bool holds_work_ = false;
     Task inner_;  // Last: destroyed first, while env_ is still valid
+
+    ~run_awaitable_ex()
+    {
+        // Only a parent destroyed from above leaves the trampoline
+        // still owned; checked here so it terminates whatever the
+        // inner task type does when destroyed while lent.
+        if(tr_.h_ && tr_.h_.promise().owner_)
+            std::terminate();
+        // A parent its context destroys instead of resuming never
+        // reaches await_resume.
+        if(holds_work_ && tr_.h_)
+            tr_.h_.promise().caller_ex_.on_work_finished();
+    }
 
     // void allocator, inherit stop token
     run_awaitable_ex(Ex ex, Task inner)
@@ -240,6 +313,8 @@ struct [[nodiscard]] run_awaitable_ex
 
     decltype(auto) await_resume()
     {
+        if(std::exchange(holds_work_, false))
+            tr_.h_.promise().caller_ex_.on_work_finished();
         auto& p = inner_.handle().promise();
         if constexpr(requires { p.clear_owner(); })
             p.clear_owner();
@@ -252,6 +327,11 @@ struct [[nodiscard]] run_awaitable_ex
         tr_.h_.promise().owner_     = &tr_;
         tr_.h_.promise().caller_ex_ = caller_env->executor;
         tr_.h_.promise().parent_.h = cont;
+        // Released once the parent resumes or is reaped. Not on the
+        // post back: the parent's chain may own the executor object and
+        // can be gone by the time post returns.
+        caller_env->executor.on_work_started();
+        holds_work_ = true;
 
         auto h = inner_.handle();
         auto& p = h.promise();
@@ -272,7 +352,23 @@ struct [[nodiscard]] run_awaitable_ex
 
         p.set_environment(&env_);
         task_cont_.h = h;
-        ex_.post(task_cont_);
+        try
+        {
+            ex_.post(task_cont_);
+        }
+        catch(...)
+        {
+            // The parent resumes with the exception: nothing may still
+            // treat the task as lent or hold work for the parent.
+            if constexpr(requires { p.clear_owner(); })
+                p.clear_owner();
+            p.set_continuation(std::noop_coroutine());
+            task_cont_.h = nullptr;
+            tr_ = boundary_trampoline();
+            holds_work_ = false;
+            caller_env->executor.on_work_finished();
+            throw;
+        }
         return std::noop_coroutine();
     }
 
@@ -303,6 +399,19 @@ struct [[nodiscard]] run_awaitable
     std::conditional_t<InheritStopToken, std::monostate, std::stop_token> st_;
     io_env env_;
     Task inner_;  // Last: destroyed first, while env_ is still valid
+
+    ~run_awaitable()
+    {
+        // Only a parent destroyed from above leaves the task lent;
+        // checked here so it terminates whatever the task type does
+        // when destroyed while lent.
+        auto h = inner_.handle();
+        if constexpr(requires { h.promise().has_owner(); })
+        {
+            if(h && !h.done() && h.promise().has_owner())
+                std::terminate();
+        }
+    }
 
     // void allocator, inherit stop token
     explicit run_awaitable(Task inner)

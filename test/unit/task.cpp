@@ -1408,16 +1408,16 @@ struct task_test
         BOOST_TEST_EQ(parent_down, 1);
     }
 
-    // Through run(), the child goes and the trampoline is released, but
-    // the chain stops there: the parent may belong to another context.
+    // Through run(), the parent may belong to another context, so its
+    // destruction is posted to its own executor instead of done inline.
     void testDestroyAwaitedChildThroughRun()
     {
         int child_down = 0, parent_down = 0;
-        // The parent is left suspended; the arena reclaims it.
-        std::pmr::monotonic_buffer_resource arena;
+        std::queue<std::coroutine_handle<>> q;
         {
             int dispatch_count = 0;
             test_executor ex(dispatch_count);
+            queuing_executor caller(q);
             auto child = [](destroy_count_t) -> capy::task<void>
             {
                 co_await self_destroy_awaitable{};
@@ -1426,10 +1426,12 @@ struct task_test
             {
                 co_await capy::run(ex)(child(destroy_count_t(child_down)));
             };
-            run_async(ex, &arena)(parent(destroy_count_t(parent_down)));
+            run_async(caller)(parent(destroy_count_t(parent_down)));
+            pump(q);
         }
+        pump(q);
         BOOST_TEST_EQ(child_down, 1);
-        BOOST_TEST_EQ(parent_down, 0);
+        BOOST_TEST_EQ(parent_down, 1);
     }
 
     void testStop()
