@@ -22,6 +22,9 @@
 
 #include <array>
 #include <atomic>
+#include <mutex>
+#include <condition_variable>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -774,6 +777,102 @@ struct thread_pool_test
         worker.join();
     }
 
+    // A first post racing join() either starts threads join() then
+    // joins, or starts none; the destructor never meets a running one.
+    void
+    testJoinRacesFirstPost()
+    {
+        for(int i = 0; i < 200; ++i)
+        {
+            continuation c{std::noop_coroutine()};
+            thread_pool pool(4);
+            std::atomic<bool> go{false};
+            std::thread t([&]{
+                while(!go.load())
+                {
+                }
+                pool.get_executor().post(c);
+            });
+            go.store(true);
+            pool.join();
+            t.join();
+        }
+    }
+
+    // join() waiting on counted work must not stop the first post from
+    // starting the threads that work needs.
+    void
+    testJoinWaitingThenFirstPost()
+    {
+        for(int i = 0; i < 20; ++i)
+        {
+            thread_pool pool(2);
+            auto ex = pool.get_executor();
+            auto guard = std::make_unique<
+                work_guard<thread_pool::executor_type>>(ex);
+            std::atomic<bool> joining{false};
+            std::mutex m;
+            std::condition_variable cv;
+            bool joined = false;
+            std::thread j([&]{
+                joining.store(true);
+                pool.join();
+                std::lock_guard<std::mutex> lk(m);
+                joined = true;
+                cv.notify_all();
+            });
+            while(!joining.load())
+                std::this_thread::yield();
+            std::atomic<bool> ran{false};
+            auto t = [](std::atomic<bool>& r) -> task<void>
+            {
+                r.store(true);
+                co_return;
+            };
+            run_async(ex)(t(ran));
+            guard.reset();
+            bool ok;
+            {
+                // Only a watchdog: a broken pool never returns from join().
+                std::unique_lock<std::mutex> lk(m);
+                ok = cv.wait_for(lk, std::chrono::seconds(30),
+                    [&]{ return joined; });
+            }
+            BOOST_TEST(ok);
+            BOOST_TEST(ran.load());
+            if(!ok)
+                pool.stop();
+            j.join();
+        }
+    }
+
+    // The last work count released from a foreign thread is done with
+    // the pool before join() can see it reach zero.
+    void
+    testForeignWorkFinishedRacesJoin()
+    {
+        for(int i = 0; i < 500; ++i)
+        {
+            std::thread t;
+            {
+                auto pool = std::make_unique<thread_pool>(1);
+                auto ex = pool->get_executor();
+                ex.on_work_started();
+                std::atomic<bool> go{false};
+                t = std::thread([ex, &go]{
+                    while(!go.load())
+                    {
+                    }
+                    ex.on_work_finished();
+                });
+                go.store(true);
+                pool->join();
+                pool.reset();
+            }
+            t.join();
+        }
+    }
+
     // Work posted while the pool's services shut down is destroyed with
     // the pool rather than left queued.
     void
@@ -840,6 +939,9 @@ struct thread_pool_test
         testForeignPostAfterJoin();
         testPostDuringShutdownDestroyed();
         testPostFromServiceDestructorDestroyed();
+        testJoinRacesFirstPost();
+        testJoinWaitingThenFirstPost();
+        testForeignWorkFinishedRacesJoin();
     }
 };
 

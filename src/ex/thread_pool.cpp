@@ -31,18 +31,18 @@
     directly. Worker threads wait on a condition_variable until work
     is available or stop is requested.
 
-    Threads are started lazily on first post() via std::call_once to avoid
-    spawning threads for pools that are constructed but never used. Each
-    thread is named with a configurable prefix plus index for debugger
-    visibility.
+    Threads are started lazily on first post(), under mutex_, to avoid
+    spawning threads for pools that are constructed but never used. A
+    stopped pool starts none. Each thread is named
+    with a configurable prefix plus index for debugger visibility.
 
     Work tracking: on_work_started/on_work_finished maintain the atomic
-    outstanding_work_ counter. on_work_started is lock-free; the worker
-    that drives the count to zero takes mutex_ and re-reads the count
-    before deciding to stop, so the count and the stop decision stay
-    consistent even if work is started in between. join() blocks until
-    this counter reaches zero, then signals workers to stop and joins
-    threads.
+    outstanding_work_ counter. on_work_started is lock-free, and so is
+    on_work_finished while the count stays above one. The release that
+    may take it to zero is made under mutex_, so join() can't see zero,
+    return and let the pool be destroyed while that call still uses it.
+    join() blocks until this counter reaches zero, then signals workers
+    to stop and joins threads.
 
     Two shutdown paths:
     - join(): waits for outstanding work to drain, then stops workers.
@@ -104,7 +104,6 @@ class thread_pool::impl
     bool joined_{false};
     std::size_t num_threads_;
     char thread_name_prefix_[13]{};  // 12 chars max + null terminator
-    std::once_flag start_flag_;
     std::atomic<bool> started_{false};
 
 public:
@@ -175,20 +174,22 @@ public:
     void
     on_work_finished() noexcept
     {
-        if(outstanding_work_.fetch_sub(
-            1, std::memory_order_acq_rel) == 1)
+        auto n = outstanding_work_.load(std::memory_order_relaxed);
+        while(n > 1)
         {
-            // fetch_sub's result can be stale: a concurrent
-            // on_work_started() may raise the count before we take the
-            // lock, so re-read it here rather than trust the decrement.
-            std::lock_guard<std::mutex> lock(mutex_);
-            if(outstanding_work_.load(
-                std::memory_order_acquire) == 0 && joined_ && !stop_)
-            {
-                stop_ = true;
-                done_cv_.notify_all();
-                work_cv_.notify_all();
-            }
+            if(outstanding_work_.compare_exchange_weak(
+                n, n - 1, std::memory_order_acq_rel))
+                return;
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        outstanding_work_.fetch_sub(1, std::memory_order_acq_rel);
+        // Re-read: a concurrent on_work_started() may have raised it.
+        if(outstanding_work_.load(
+            std::memory_order_acquire) == 0 && joined_ && !stop_)
+        {
+            stop_ = true;
+            done_cv_.notify_all();
+            work_cv_.notify_all();
         }
     }
 
@@ -235,12 +236,16 @@ private:
     void
     ensure_started()
     {
-        std::call_once(start_flag_, [this]{
-            threads_.reserve(num_threads_);
-            for(std::size_t i = 0; i < num_threads_; ++i)
-                threads_.emplace_back([this, i]{ run(i); });
-            started_.store(true, std::memory_order_release);
-        });
+        // Under the lock, so join() either sees every thread started
+        // here or makes this start none. A joined pool still starts them:
+        // join() may be waiting on work that needs them.
+        std::lock_guard<std::mutex> lock(mutex_);
+        if(started_.load(std::memory_order_relaxed) || stop_)
+            return;
+        threads_.reserve(num_threads_);
+        for(std::size_t i = 0; i < num_threads_; ++i)
+            threads_.emplace_back([this, i]{ run(i); });
+        started_.store(true, std::memory_order_release);
     }
 
     void
