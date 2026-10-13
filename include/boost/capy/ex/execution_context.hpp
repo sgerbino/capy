@@ -473,9 +473,15 @@ protected:
 
         @par Preconditions
         @li `shutdown()` was called.
+        @li No service's destructor creates a service of a type
+            already destroyed here; two such destructors that re-create
+            each other never let this return.
 
         @par Effects
-        All services are deleted and removed from the container.
+        All services are deleted and removed from the container. Each
+        is removed just before it is deleted, so a destructor can still
+        find the services not yet destroyed. A service a destructor
+        creates is deleted in turn.
 
         @par Postconditions
         @li The service container is empty.

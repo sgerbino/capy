@@ -47,13 +47,12 @@ void
 execution_context::
 destroy() noexcept
 {
-    service* p = head_;
-    head_ = nullptr;
-    while(p)
+    // One at a time, so a destructor can still find the services not
+    // yet destroyed, and one it creates is destroyed in turn.
+    while(service* p = head_)
     {
-        service* next = p->next_;
+        head_ = p->next_;
         delete p;
-        p = next;
     }
 }
 
