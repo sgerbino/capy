@@ -224,10 +224,10 @@ public:
     void
     stop() noexcept
     {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            stop_ = true;
-        }
+        // Under the lock: the join() this releases may return and let
+        // the pool be destroyed as soon as the lock is free.
+        std::lock_guard<std::mutex> lock(mutex_);
+        stop_ = true;
         work_cv_.notify_all();
         done_cv_.notify_all();
     }

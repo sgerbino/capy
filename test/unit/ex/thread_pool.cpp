@@ -799,6 +799,33 @@ struct thread_pool_test
         }
     }
 
+    // A stop() on another thread is done with the pool before the join()
+    // it releases can return and let the pool be destroyed.
+    void
+    testStopRacesJoinAndDestroy()
+    {
+        for(int i = 0; i < 300; ++i)
+        {
+            std::thread t;
+            {
+                auto pool = std::make_unique<thread_pool>(1);
+                auto ex = pool->get_executor();
+                ex.on_work_started();
+                std::atomic<bool> go{false};
+                t = std::thread([p = pool.get(), &go]{
+                    while(!go.load())
+                    {
+                    }
+                    p->stop();
+                });
+                go.store(true);
+                pool->join();
+                pool.reset();
+            }
+            t.join();
+        }
+    }
+
     // join() waiting on counted work must not stop the first post from
     // starting the threads that work needs.
     void
@@ -941,6 +968,7 @@ struct thread_pool_test
         testPostFromServiceDestructorDestroyed();
         testJoinRacesFirstPost();
         testJoinWaitingThenFirstPost();
+        testStopRacesJoinAndDestroy();
         testForeignWorkFinishedRacesJoin();
     }
 };
