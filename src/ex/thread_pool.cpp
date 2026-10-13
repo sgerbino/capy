@@ -105,6 +105,7 @@ class thread_pool::impl
     std::size_t num_threads_;
     char thread_name_prefix_[13]{};  // 12 chars max + null terminator
     std::once_flag start_flag_;
+    std::atomic<bool> started_{false};
 
 public:
     ~impl() = default;
@@ -115,11 +116,9 @@ public:
         return current_.get() == this;
     }
 
-    // Destroy abandoned coroutine frames. Must be called
-    // before execution_context::shutdown()/destroy() so
-    // that suspended-frame destructors touching services
-    // (e.g. cancelling registrations) run while those
-    // services are still valid.
+    // Destroy abandoned coroutine frames. Called after the services
+    // shut down, since their shutdown can post more, and again after
+    // they are destroyed, for anything their destructors post.
     void
     drain_abandoned() noexcept
     {
@@ -146,14 +145,25 @@ public:
     void
     post(continuation& c)
     {
-        ensure_started();
+        if(!started_.load(std::memory_order_acquire))
         {
-            std::lock_guard<std::mutex> lock(mutex_);
-            push(&c);
-            // Under the lock so the pool cannot drain, join, and
-            // destroy the condition variable mid-signal.
-            work_cv_.notify_one();
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if(stop_)
+                {
+                    // Stopped before any thread started: nothing will
+                    // run it, and the destructor's drain destroys it.
+                    push(&c);
+                    return;
+                }
+            }
+            ensure_started();
         }
+        std::lock_guard<std::mutex> lock(mutex_);
+        push(&c);
+        // Under the lock so the pool cannot drain, join, and
+        // destroy the condition variable mid-signal.
+        work_cv_.notify_one();
     }
 
     void
@@ -229,6 +239,7 @@ private:
             threads_.reserve(num_threads_);
             for(std::size_t i = 0; i < num_threads_; ++i)
                 threads_.emplace_back([this, i]{ run(i); });
+            started_.store(true, std::memory_order_release);
         });
     }
 
@@ -274,9 +285,10 @@ thread_pool::
 {
     impl_->stop();
     impl_->join();
-    impl_->drain_abandoned();
     shutdown();
+    impl_->drain_abandoned();
     destroy();
+    impl_->drain_abandoned();
     delete impl_;
 }
 

@@ -16,6 +16,7 @@
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/work_guard.hpp>
+#include <boost/capy/task.hpp>
 
 #include "test_helpers.hpp"
 
@@ -137,6 +138,51 @@ name_checker check_thread_name(name_check_result& result, char const* prefix)
     co_return;
 }
 #endif
+
+// Posts during shutdown, as a primitive owned by a frame that a
+// service's shutdown destroys would.
+struct late_poster : execution_context::service
+{
+    thread_pool::executor_type ex_;
+    continuation* c_;
+
+    late_poster(
+        execution_context&,
+        thread_pool::executor_type ex,
+        continuation& c)
+        : ex_(ex)
+        , c_(&c)
+    {
+    }
+
+    void shutdown() override
+    {
+        ex_.post(*c_);
+    }
+};
+
+// Posts from its destructor, after the pool's services shut down.
+struct dtor_poster : execution_context::service
+{
+    thread_pool::executor_type ex_;
+    continuation* c_;
+
+    dtor_poster(
+        execution_context&,
+        thread_pool::executor_type ex,
+        continuation& c)
+        : ex_(ex)
+        , c_(&c)
+    {
+    }
+
+    ~dtor_poster()
+    {
+        ex_.post(*c_);
+    }
+
+    void shutdown() override {}
+};
 
 } // namespace
 
@@ -728,6 +774,40 @@ struct thread_pool_test
         worker.join();
     }
 
+    // Work posted while the pool's services shut down is destroyed with
+    // the pool rather than left queued.
+    void
+    testPostDuringShutdownDestroyed()
+    {
+        int down = 0;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        auto t = probe(destroy_count_t(down));
+        continuation c{t.handle()};
+        t.release();
+        {
+            thread_pool pool(1);
+            pool.make_service<late_poster>(pool.get_executor(), c);
+        }
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // Work posted while the pool's services are destroyed is destroyed
+    // with the pool.
+    void
+    testPostFromServiceDestructorDestroyed()
+    {
+        int down = 0;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        auto t = probe(destroy_count_t(down));
+        continuation c{t.handle()};
+        t.release();
+        {
+            thread_pool pool(1);
+            pool.make_service<dtor_poster>(pool.get_executor(), c);
+        }
+        BOOST_TEST_EQ(down, 1);
+    }
+
     void
     run()
     {
@@ -758,6 +838,8 @@ struct thread_pool_test
         testWorkGuardKeepsPoolAlive();
         testJoinWithRunAsync();
         testForeignPostAfterJoin();
+        testPostDuringShutdownDestroyed();
+        testPostFromServiceDestructorDestroyed();
     }
 };
 
