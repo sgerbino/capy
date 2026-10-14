@@ -37,6 +37,25 @@ namespace capy {
 
 namespace detail {
 
+#if (defined(BOOST_CAPY_DYN_LINK) || defined(BOOST_ALL_DYN_LINK)) && \
+    !defined(BOOST_CAPY_STATIC_LINK)
+
+/** Return this thread's frame allocator slot.
+
+    A shared library build defines it in the library: an inline
+    definition gives each module its own slot, and a coroutine created
+    in one would not see the allocator a launcher in another installed.
+    A static build keeps it inline, since resuming a coroutine writes
+    it.
+
+    @return A reference to the calling thread's slot.
+*/
+BOOST_CAPY_DECL
+std::pmr::memory_resource*&
+current_frame_allocator_ref() noexcept;
+
+#else
+
 // MSVC may keep an inlined thread_local's address in a coroutine
 // frame across a suspension, so a resumption on another thread
 // would write the first thread's slot.
@@ -49,6 +68,8 @@ current_frame_allocator_ref() noexcept
     static thread_local std::pmr::memory_resource* mr = nullptr;
     return mr;
 }
+
+#endif
 
 } // namespace detail
 
