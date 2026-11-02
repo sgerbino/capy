@@ -1677,6 +1677,41 @@ struct task_test
         BOOST_TEST_EQ(result, 7);
     }
 
+    // Completes synchronously and returns an rvalue reference to an
+    // error_code that outlives the co_await.
+    struct rref_result_awaitable
+    {
+        std::error_code& ec;
+
+        bool await_ready() const noexcept { return true; }
+
+        void await_suspend(
+            std::coroutine_handle<>, await_context const*) noexcept
+        {
+        }
+
+        std::error_code&& await_resume() noexcept
+        {
+            return std::move(ec);
+        }
+    };
+
+    // A co_await whose await_resume returns an rvalue reference yields
+    // that same object.
+    void
+    testRvalueReferenceResult()
+    {
+        bool same = false;
+        auto coro = [&]() -> task<>
+        {
+            std::error_code ec;
+            std::error_code&& r = co_await rref_result_awaitable{ec};
+            same = &r == &ec;
+        };
+        test::run_blocking()(coro());
+        BOOST_TEST(same);
+    }
+
     void
     testBoolSuspendAwaitable()
     {
@@ -1940,6 +1975,7 @@ struct task_test
         testCatchAfterRmwAwaitReady();
         testCatchAroundWakerWait();
         testBoolSuspendAwaitable();
+        testRvalueReferenceResult();
         testVoidSuspendAwaitable();
         testReturnValue();
         testException();

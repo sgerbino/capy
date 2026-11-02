@@ -12,6 +12,7 @@
 #define BOOST_CAPY_DETAIL_FRAME_MEMORY_RESOURCE_HPP
 
 #include <boost/capy/detail/config.hpp>
+#include <boost/capy/detail/except.hpp>
 
 #include <cstddef>
 #include <memory>
@@ -118,7 +119,7 @@ protected:
         // A block is only as aligned as a unit. The memory_resource
         // contract allows a throw, never a misaligned block.
         if(alignment > alignof(frame_unit))
-            throw std::bad_alloc();
+            throw_bad_alloc();
         return unit_traits::allocate(alloc_, frame_units(bytes));
     }
 
