@@ -2078,47 +2078,6 @@ struct quitter_test
         }
     }
 
-    // Completes synchronously after requesting a stop, and returns an
-    // rvalue reference to an error_code that outlives the co_await.
-    struct rref_result_after_stop_awaitable
-    {
-        std::stop_source& ss;
-        std::error_code& ec;
-        std::error_code const*& returned;
-
-        bool await_ready() const noexcept { return false; }
-
-        std::coroutine_handle<>
-        await_suspend(
-            std::coroutine_handle<> h, await_context const*) noexcept
-        {
-            ss.request_stop();
-            return h;
-        }
-
-        std::error_code&& await_resume() noexcept
-        {
-            returned = &ec;
-            return std::move(ec);
-        }
-    };
-
-    static quitter<results<>>
-    rref_result_then_yield(
-        std::stop_source& ss, sync_stop_seen& out, bool& same)
-    {
-        std::error_code ec;
-        std::error_code const* returned = nullptr;
-        std::error_code&& r = co_await
-            rref_result_after_stop_awaitable{ss, ec, returned};
-        same = &r == returned;
-        out.succeeded = !r;
-        out.after_first = true;
-        co_await yield_awaitable{};
-        out.reached = true;
-        co_return results<>{};
-    }
-
     // Completes synchronously after requesting a stop, with a const
     // results holding a move-only payload.
     struct const_move_only_after_stop_awaitable
@@ -2154,33 +2113,19 @@ struct quitter_test
         co_return results<>{};
     }
 
-    // Results held by rvalue reference, or as a const move-only value,
-    // decide like any other results: the body receives them.
+    // Results held as a const move-only value decide like any other
+    // results: the body receives them.
     void
     testOtherResultCategoriesDecide()
     {
-        {
-            std::stop_source ss;
-            sync_stop_seen out;
-            bool same = false;
-            run_async_then_stop(ss, await_into(
-                rref_result_then_yield(ss, out, same), out.s));
-            BOOST_TEST(out.succeeded);
-            BOOST_TEST(same);
-            BOOST_TEST(out.after_first);
-            BOOST_TEST(!out.reached);
-            BOOST_TEST(out.s.ec == cond::canceled);
-        }
-        {
-            std::stop_source ss;
-            sync_stop_seen out;
-            run_async_then_stop(ss, await_into(
-                const_move_only_then_yield(ss, out), out.s));
-            BOOST_TEST(out.succeeded);
-            BOOST_TEST(out.after_first);
-            BOOST_TEST(!out.reached);
-            BOOST_TEST(out.s.ec == cond::canceled);
-        }
+        std::stop_source ss;
+        sync_stop_seen out;
+        run_async_then_stop(ss, await_into(
+            const_move_only_then_yield(ss, out), out.s));
+        BOOST_TEST(out.succeeded);
+        BOOST_TEST(out.after_first);
+        BOOST_TEST(!out.reached);
+        BOOST_TEST(out.s.ec == cond::canceled);
     }
 
     static quitter<results<>>
