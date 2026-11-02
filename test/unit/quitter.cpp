@@ -65,6 +65,12 @@ static_assert(ContextAwaitable<quitter<int>>);
 static_assert(ContextRunnable<quitter<void>>);
 static_assert(ContextRunnable<quitter<int>>);
 
+// capy's launchers reach a quitter's private launch hooks; a task has
+// none.
+static_assert(detail::stops_by_abandonment<quitter<void>>);
+static_assert(detail::stops_by_abandonment<quitter<results<>>>);
+static_assert(!detail::stops_by_abandonment<task<>>);
+
 struct quitter_test
 {
     // True when `ep` holds what a stopped quitter<> or plain-T quitter

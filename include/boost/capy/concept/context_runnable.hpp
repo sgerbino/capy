@@ -78,10 +78,8 @@ namespace capy {
     @li Sets the `await_context` pointer that propagates executor, stop token,
         and allocator through the coroutine chain.
     @li The pointed-to `await_context` must outlive the coroutine.
-    @li For a @ref quitter, the environment's `owner` is the owner that a
-        stop abandons. It must belong to whatever started the quitter,
-        never to the segment of an awaiting @ref task: see
-        @ref quitter::handle.
+    @li A @ref quitter is started with @ref run_async or @ref run, or by
+        awaiting it: see @ref quitter::handle.
 
     @par Requirements
 

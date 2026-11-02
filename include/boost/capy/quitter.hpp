@@ -104,6 +104,8 @@ struct quitter;
 
 namespace detail {
 
+struct launch_access;
+
 template<typename T>
 struct quitter_return_base
 {
@@ -279,7 +281,7 @@ struct quitter_segment::promise_type
     // frame and touches nothing of it afterwards.
     void stop() noexcept
     {
-        frame_env_->owner->abandon_for_stop();
+        chain_owner_access::abandon_for_stop(*frame_env_->owner);
     }
 
     std::coroutine_handle<> decide() noexcept
@@ -429,10 +431,11 @@ make_quitter_segment()
     never started. A quitter must not be awaited twice.
 
     @par Remarks
-    Supports _ContextAwaitable cancellation_. A quitter stops through the
-    owner of its segment (@ref await_context::owner). A launcher that
-    starts a quitter in an environment with no owner cannot stop it: a
-    debug build asserts, and otherwise the quitter runs on as a
+    Supports _ContextAwaitable cancellation_. Start a quitter with
+    @ref run_async or @ref run, or by awaiting it. A quitter stops
+    through the owner of its segment (@ref await_context::owner); one
+    whose handle is resumed in an environment with no owner cannot stop:
+    a debug build asserts, and otherwise the quitter runs on as a
     @ref task would. A stop that arrives while
     the execution context is being shut down may end the quitter as a
     teardown instead, with nothing delivered. Stop the work, wait for it
@@ -484,6 +487,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     {
     private:
         friend quitter;
+        friend struct detail::launch_access;
 
         template<class>
         friend struct quitter;
@@ -504,6 +508,24 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             own_gate_ = detail::make_quitter_segment();
             seg_ = &own_gate_.h_.promise();
             seg_->frame_env_ = this->environment();
+        }
+
+        // What a launcher reports in place of the result, when the
+        // segment it owns was abandoned for a stop.
+        static T stopped_result()
+        {
+            return detail::stopped_value<T>::get();
+        }
+
+        // The handle a launcher resumes to start the quitter: its gate,
+        // so the stop is checked when the body would start rather than
+        // when the launcher was called. The environment must be set.
+        std::coroutine_handle<> launch_handle()
+        {
+            open_gate();
+            seg_->target_ =
+                std::coroutine_handle<promise_type>::from_promise(*this);
+            return seg_->handle();
         }
 
     public:
@@ -527,49 +549,6 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             return ep_;
         }
 
-        /** Return what a stopped `quitter<T>` delivers.
-
-            Launchers that start a quitter directly call this when its
-            segment was abandoned for a stop: see
-            @ref chain_owner::stopped. Its result, or the exception it
-            throws, is reported in place of the coroutine's own result.
-
-            @return `make_error_code(error::canceled)` with value-initialized
-            payloads for `results<Ts...>`, or
-            `make_error_code(error::canceled)` for `std::error_code`.
-
-            @throws std::system_error For any other `T`, `void` included,
-            with a `code()` that compares equal to `cond::canceled`.
-        */
-        static T stopped_result()
-        {
-            return detail::stopped_value<T>::get();
-        }
-
-        /** Return the handle a launcher resumes to start the quitter.
-
-            Launchers that start a quitter directly resume this handle,
-            not the coroutine's own, so the stop is checked when the body
-            would start rather than when the launcher was called. The
-            handle is the quitter's gate, which either starts the body
-            or, if a stop was requested by then, abandons the segment for
-            the stop: see @ref chain_owner::abandon_for_stop.
-
-            @par Preconditions
-            The coroutine has not started, and its environment is set.
-
-            @return The handle of the quitter's gate.
-
-            @throws std::bad_alloc If the gate cannot be allocated.
-        */
-        std::coroutine_handle<> launch_handle()
-        {
-            open_gate();
-            seg_->target_ =
-                std::coroutine_handle<promise_type>::from_promise(*this);
-            return seg_->handle();
-        }
-
         /** Return the owning `quitter` for this coroutine.
 
             Called by the compiler to produce the object returned to the
@@ -588,9 +567,8 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             The coroutine always suspends at the initial suspend point,
             so the body does not start until the quitter is awaited or
             started. When the body is resumed, the awaiter restores the
-            thread-local frame allocator. A quitter started directly by a
-            launcher that did not call @ref launch_handle creates its
-            gate at that point.
+            thread-local frame allocator. A quitter whose own handle was
+            resumed to start it creates its gate at that point.
 
             @return An awaiter that suspends unconditionally.
         */
@@ -1215,14 +1193,13 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         coroutine gives it up by passing the continuation it keeps to
         @ref abandon. `handle()` belongs to the owning quitter object.
 
-        @note To run the quitter for an awaiting coroutine, call its
-        `await_suspend`, which opens a segment for it. Do not resume
-        this handle with the awaiting coroutine's environment: a stop
-        then abandons the awaiting coroutine's segment, and a @ref task
-        chain in it is torn down with no handler called. When
-        `run_async` or `run` owns that segment, a debug build asserts.
-        A launcher that resumes the handle itself must own the segment:
-        see @ref await_context::owner.
+        @note Start a quitter with @ref run_async or @ref run, or by
+        awaiting it: its `await_suspend` opens a segment of its own.
+        Resuming this handle instead runs the quitter in the segment of
+        the environment it was given, and a stop abandons that segment.
+        With an awaiting coroutine's environment, a @ref task chain
+        there is torn down with no handler called. When `run_async` or
+        `run` owns that segment, a debug build asserts.
 
         @return The coroutine handle.
     */

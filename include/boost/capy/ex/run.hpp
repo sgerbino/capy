@@ -315,7 +315,8 @@ struct [[nodiscard]] run_awaitable_ex
                 "run reports a quitter's stop as a value: use "
                 "quitter<results<...>> or quitter<std::error_code>");
             if(tr_.h_ && tr_.h_.promise().segment_.stopped())
-                return Task::promise_type::stopped_result();
+                return launch_access::stopped_result<
+                    typename Task::promise_type>();
         }
         return inner_.await_resume();
     }
@@ -366,7 +367,7 @@ struct [[nodiscard]] run_awaitable_ex
             // abandoned for the stop, and the parent receives the
             // stopped value.
             if constexpr(stops_by_abandonment<Task>)
-                task_cont_.h = p.launch_handle();
+                task_cont_.h = launch_access::launch_handle(p);
             ex_.post(task_cont_);
         }
         catch(...)

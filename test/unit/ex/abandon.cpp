@@ -632,7 +632,7 @@ struct abandon_test
         counting_executor ex{&posts};
         chain_owner owner;
         owner.bind(std::noop_coroutine(), ex);
-        owner.abandon_for_stop();
+        detail::chain_owner_access::abandon_for_stop(owner);
         BOOST_TEST(owner.abandoned());
         BOOST_TEST(owner.stopped());
         BOOST_TEST_EQ(posts, 1);
@@ -648,7 +648,7 @@ struct abandon_test
         owner.abandon();
         BOOST_TEST(owner.abandoned());
         BOOST_TEST(!owner.stopped());
-        owner.abandon_for_stop();
+        detail::chain_owner_access::abandon_for_stop(owner);
         BOOST_TEST(!owner.stopped());
         BOOST_TEST_EQ(posts, 1);
     }
@@ -666,7 +666,7 @@ struct abandon_test
             owner.bind(std::noop_coroutine(), ex);
             std::thread::id stop_thread;
             std::thread teardown([&]{ owner.abandon(); });
-            std::thread stop([&]{ owner.abandon_for_stop(); });
+            std::thread stop([&]{ detail::chain_owner_access::abandon_for_stop(owner); });
             stop_thread = stop.get_id();
             teardown.join();
             stop.join();

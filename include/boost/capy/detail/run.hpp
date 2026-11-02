@@ -23,13 +23,31 @@ namespace boost {
 namespace capy {
 namespace detail {
 
-// A runnable that a stop ends by abandonment (quitter): its promise
-// says what it delivers instead of its own result, and gives the
-// handle a launcher resumes to start it.
+// Reaches the launch hooks of a runnable that a stop ends by
+// abandonment (quitter). They are private: only capy's launchers drive
+// a quitter's handle, and every other caller awaits it.
+struct launch_access
+{
+    // What the runnable delivers instead of its own result.
+    template<class Promise>
+    static auto stopped_result() -> decltype(Promise::stopped_result())
+    {
+        return Promise::stopped_result();
+    }
+
+    // The handle a launcher resumes to start the runnable.
+    template<class Promise>
+    static auto launch_handle(Promise& p) -> decltype(p.launch_handle())
+    {
+        return p.launch_handle();
+    }
+};
+
 template<class Task>
 concept stops_by_abandonment = requires(typename Task::promise_type& p) {
-    Task::promise_type::stopped_result();
-    { p.launch_handle() } -> std::convertible_to<std::coroutine_handle<>>;
+    launch_access::stopped_result<typename Task::promise_type>();
+    { launch_access::launch_handle(p) } ->
+        std::convertible_to<std::coroutine_handle<>>;
 };
 
 /// Concept for standard Allocator types.

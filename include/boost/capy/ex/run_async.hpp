@@ -70,14 +70,14 @@ void invoke_stopped(Handlers& h)
 #if defined(__cpp_exceptions)
         try
         {
-            P::stopped_result();
+            launch_access::stopped_result<P>();
         }
         catch(...)
         {
             h(std::current_exception());
         }
 #else
-        P::stopped_result();
+        launch_access::stopped_result<P>();
 #endif
     }
     else
@@ -86,7 +86,7 @@ void invoke_stopped(Handlers& h)
 #if defined(__cpp_exceptions)
         try
         {
-            v.emplace(P::stopped_result());
+            v.emplace(launch_access::stopped_result<P>());
         }
         catch(...)
         {
@@ -94,7 +94,7 @@ void invoke_stopped(Handlers& h)
             return;
         }
 #else
-        v.emplace(P::stopped_result());
+        v.emplace(launch_access::stopped_result<P>());
 #endif
         h(std::move(*v));
     }
@@ -665,7 +665,8 @@ public:
         // If this or dispatch throws, the destructor destroys the
         // trampoline and the unstarted task with it.
         if constexpr(detail::stops_by_abandonment<Task>)
-            p.task_cont_.h = task_promise.launch_handle();
+            p.task_cont_.h =
+                detail::launch_access::launch_handle(task_promise);
         auto next = p.wg_.executor().dispatch(p.task_cont_);
         // From here the trampoline destroys itself when the task ends.
         tr_.h_ = nullptr;

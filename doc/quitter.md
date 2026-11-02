@@ -153,18 +153,17 @@ quitter child delivers `canceled` as a value and throws nothing.
 
 ## Restrictions
 
-**Run a quitter through `await_suspend`, not `handle()`.** A custom
-awaitable that runs a quitter for an awaiting coroutine calls the
-quitter's `await_suspend`, which opens a segment. Resuming
-`handle()` with the awaiting coroutine's environment puts the quitter
-in that coroutine's segment, so a stop abandons the awaiting
-coroutine's own segment, and a `task` chain there is torn down with no
-handler called. A debug build asserts when `run_async` or `run` owns
-that segment. A launcher that resumes the handle itself must bind a
-`chain_owner` of its own.
-
-**An environment with no owner cannot stop a quitter.** A debug build
-asserts; otherwise the quitter runs on as a `task` would.
+**Start a quitter with `run_async` or `run`, or by awaiting it.** Its
+`await_suspend` opens a segment of its own, and a combinator or
+custom awaitable that runs a quitter calls it. Only capy's launchers
+drive a quitter's handle, through hooks that are not public. Resuming
+`handle()` instead puts the quitter in the segment of the environment
+it was given. With an awaiting coroutine's environment, a stop then
+abandons that coroutine's segment, and a `task` chain there is torn
+down with no handler called. A debug build asserts when `run_async` or
+`run` owns that segment. In an environment with no owner, the quitter
+cannot stop: a debug build asserts; otherwise it runs on as a `task`
+would.
 
 **Structured bindings at a `co_await`.** A stop destroys quitter frames
 that are suspended at a `co_await`. GCC 15.2, and GCC 16 before
