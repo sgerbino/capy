@@ -67,8 +67,9 @@ namespace boost::capy::detail {
     executor destroy it: either way it destroys the inner task, which
     unwinds the segment. After a teardown it then abandons the
     caller's segment, which unwinds the parent on its own executor.
-    After a quitter's stop it posts the parent instead, whose
-    `co_await` yields the quitter's stopped value. The caller's
+    After a quitter's stop, a resumed trampoline posts the parent
+    instead, whose `co_await` yields the quitter's stopped value; a
+    destroyed one cannot, so the stop ends as a teardown. The caller's
     execution context must outlive that.
 */
 struct boundary_trampoline
@@ -874,7 +875,8 @@ run(Ex ex)
 
 /** Bind a task to an executor with a stop token.
 
-    @ref run(Ex) describes teardown and preconditions.
+    @ref run(Ex) describes teardown, a @ref quitter's stop, and
+    preconditions.
 
     @param ex The executor on which the task should run.
     @param st The stop token for cooperative cancellation.
@@ -893,7 +895,8 @@ run(Ex ex, std::stop_token st)
 
 /** Bind a task to an executor with a memory resource.
 
-    @ref run(Ex) describes teardown and preconditions.
+    @ref run(Ex) describes teardown, a @ref quitter's stop, and
+    preconditions.
 
     @param ex The executor on which the task should run.
     @param mr The memory resource for frame allocation.
@@ -916,7 +919,8 @@ run(Ex ex, std::pmr::memory_resource* mr)
     `co_await run(ex, alloc)(task())`: the task's frame is allocated from
     memory the wrapper holds until the end of that expression.
 
-    @ref run(Ex) describes teardown and preconditions.
+    @ref run(Ex) describes teardown, a @ref quitter's stop, and
+    preconditions.
 
     @param ex The executor on which the task should run.
     @param alloc The allocator for frame allocation.
@@ -935,7 +939,8 @@ run(Ex ex, Alloc alloc)
 
 /** Bind a task to an executor with stop token and memory resource.
 
-    @ref run(Ex) describes teardown and preconditions.
+    @ref run(Ex) describes teardown, a @ref quitter's stop, and
+    preconditions.
 
     @param ex The executor on which the task should run.
     @param st The stop token for cooperative cancellation.
@@ -959,7 +964,8 @@ run(Ex ex, std::stop_token st, std::pmr::memory_resource* mr)
     `co_await run(ex, alloc)(task())`: the task's frame is allocated from
     memory the wrapper holds until the end of that expression.
 
-    @ref run(Ex) describes teardown and preconditions.
+    @ref run(Ex) describes teardown, a @ref quitter's stop, and
+    preconditions.
 
     @param ex The executor on which the task should run.
     @param st The stop token for cooperative cancellation.
@@ -982,6 +988,8 @@ run(Ex ex, std::stop_token st, Alloc alloc)
     The task inherits the caller's executor. Only the stop token
     is overridden.
 
+    A stopped @ref quitter yields its stopped value: see @ref quitter.
+
     @par Example
     @par !example example_1
 
@@ -1000,6 +1008,8 @@ run(std::stop_token st)
 
     The task inherits the caller's executor. The memory resource
     is used for nested frame allocations.
+
+    A stopped @ref quitter yields its stopped value: see @ref quitter.
 
     @param mr The memory resource for frame allocation.
 
@@ -1028,6 +1038,8 @@ run(std::pmr::memory_resource* mr)
     The task inherits the caller's executor. The allocator is used
     for nested frame allocations.
 
+    A stopped @ref quitter yields its stopped value: see @ref quitter.
+
     @param alloc The allocator for frame allocation.
 
     @return A wrapper that accepts a task for execution.
@@ -1042,6 +1054,8 @@ run(Alloc alloc)
 /** Run a task with stop token and memory resource.
 
     The task inherits the caller's executor.
+
+    A stopped @ref quitter yields its stopped value: see @ref quitter.
 
     @param st The stop token for cooperative cancellation.
     @param mr The memory resource for frame allocation.
@@ -1062,6 +1076,8 @@ run(std::stop_token st, std::pmr::memory_resource* mr)
     memory the wrapper holds until the end of that expression.
 
     The task inherits the caller's executor.
+
+    A stopped @ref quitter yields its stopped value: see @ref quitter.
 
     @param st The stop token for cooperative cancellation.
     @param alloc The allocator for frame allocation.

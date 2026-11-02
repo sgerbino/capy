@@ -855,7 +855,7 @@ struct quitter_test
             auto result = co_await when_all(
                 quitter_pending_size(child1_returned, &registered),
                 quitter_pending_size(child2_returned, &registered));
-            std::ignore = result;
+            BOOST_TEST(std::get<0>(result) == cond::canceled);
         };
 
         run_async(pool.get_executor(), source.get_token(),
@@ -895,17 +895,6 @@ struct quitter_test
         co_return results<std::size_t>{std::error_code(), n};
     }
 
-    static quitter<results<std::size_t>>
-    quitter_pending_size_registered(
-        bool& reached_co_return, test_latch& registered)
-    {
-        co_await parked_until_stop{&registered};
-        // A stopped quitter is abandoned, so we never reach here.
-        reached_co_return = true;
-        co_return results<std::size_t>{
-            make_error_code(error::canceled), 0};
-    }
-
     void
     testWhenAnyWithStop()
     {
@@ -925,8 +914,7 @@ struct quitter_test
             auto outer = [&]() -> task<>
             {
                 auto result = co_await when_any(
-                    quitter_pending_size_registered(
-                        sibling_returned, registered),
+                    quitter_pending_size(sibling_returned, &registered),
                     quitter_success_after_registered(42, registered));
                 // Variadic when_any returns
                 // variant<error_code, size_t, size_t>.
@@ -969,7 +957,9 @@ struct quitter_test
                 auto result = co_await when_any(
                     quitter_pending_size(child1_returned, &registered),
                     quitter_pending_size(child2_returned, &registered));
-                std::ignore = result;
+                BOOST_TEST(result.index() == 0);
+                if(result.index() == 0)
+                    BOOST_TEST(std::get<0>(result) == cond::canceled);
             };
 
             run_async(pool.get_executor(), source.get_token(),
@@ -1147,12 +1137,12 @@ struct quitter_test
         std::atomic<int> state{0};
         bool marker = false;
         bool caught = false;
-        bool stopped = false;
+        int stopped = 0;
         bool completed = false;
 
         run_async(ex, source.get_token(),
             [&]() { completed = true; },
-            [&](std::exception_ptr ep) { stopped = is_stop(ep); })(
+            [&](std::exception_ptr ep) { stopped += is_stop(ep); })(
                 rmw_ready_quitter(parked, state, false, marker, caught));
 
         BOOST_TEST(static_cast<bool>(parked));
@@ -1162,7 +1152,7 @@ struct quitter_test
             parked.resume();
 
         BOOST_TEST(!caught);
-        BOOST_TEST(stopped);
+        BOOST_TEST_EQ(stopped, 1);
         BOOST_TEST(!completed);
     }
 
@@ -1172,12 +1162,7 @@ struct quitter_test
     //    A quitter echo loop over a mock stream pair.
     //    The client exchanges data, then requests stop.
     //    The echo quitter is abandoned on the stop, RAII runs,
-    //    and the echoed data was correct.
-    //
-    //    The mock stream's read_some is not stop-aware, so we
-    //    wrap each read in when_any with a stop_only_awaitable
-    //    to make it cancellable — mirroring how a real server
-    //    would have the OS cancel an in-flight read.
+    //    and every byte was echoed.
     //----------------------------------------------------------
 
     void
@@ -1344,7 +1329,7 @@ struct quitter_test
 
         run_async(ex, source.get_token(),
             [&]() { completed = true; },
-            [&](std::exception_ptr) { ++stopped; })(
+            [&](std::exception_ptr ep) { stopped += is_stop(ep); })(
                 ready_then_stop(source, resumed));
 
         // await_resume runs, so that anything it hands over is
@@ -1402,7 +1387,7 @@ struct quitter_test
 
         run_async(ex, source.get_token(),
             [&]() { completed = true; },
-            [&](std::exception_ptr) { ++stopped; })(
+            [&](std::exception_ptr ep) { stopped += is_stop(ep); })(
                 return_self_then_stop(source, resumed));
 
         // await_resume runs, so that anything it hands over is
@@ -1604,19 +1589,21 @@ struct quitter_test
         s.resumed = true;
     }
 
-    // Runs `t` on a queue until nothing is runnable, requests the
-    // stop, and runs it again. Frames come from new_delete_resource,
-    // so ASan sees any frame used after it was freed.
+    // Starts `q` with run_async and the given handlers, runs it until
+    // nothing is runnable, requests the stop, and runs it again. Frames
+    // come from new_delete_resource, so ASan sees any frame used after
+    // it was freed.
+    template<class Q, class... H>
     static void
-    run_then_stop(std::stop_source& ss, task<> t)
+    run_async_then_stop(std::stop_source& ss, Q q, H... h)
     {
-        std::queue<continuation> q;
-        queuing_executor ex(q);
-        run_async(ex, ss.get_token(),
-            std::pmr::new_delete_resource())(std::move(t));
-        pump(q);
+        std::queue<continuation> queue;
+        queuing_executor ex(queue);
+        run_async(ex, ss.get_token(), std::pmr::new_delete_resource(),
+            h...)(std::move(q));
+        pump(queue);
         ss.request_stop();
-        pump(q);
+        pump(queue);
     }
 
     static quitter<results<std::size_t>>
@@ -1640,7 +1627,7 @@ struct quitter_test
             ec = e;
             n = v;
         };
-        run_then_stop(ss, parent());
+        run_async_then_stop(ss, parent());
         BOOST_TEST(!ec);
         BOOST_TEST_EQ(n, 42u);
     }
@@ -1663,7 +1650,7 @@ struct quitter_test
         seen s;
         int down = 0;
         bool reached = false;
-        run_then_stop(ss, await_into(guarded_wait(w, down, reached), s));
+        run_async_then_stop(ss, await_into(guarded_wait(w, down, reached), s));
         BOOST_TEST(s.resumed);
         BOOST_TEST(!s.threw);
         BOOST_TEST(s.ec == cond::canceled);
@@ -1684,7 +1671,7 @@ struct quitter_test
             std::ignore = ec;
             down_at_resume = down;
         };
-        run_then_stop(ss, parent());
+        run_async_then_stop(ss, parent());
         BOOST_TEST(!reached);
         BOOST_TEST_EQ(down_at_resume, 1);
     }
@@ -1711,7 +1698,7 @@ struct quitter_test
         std::stop_source ss;
         seen s;
         bool hit = false;
-        run_then_stop(ss, await_into(catch_all_wait(w, hit), s));
+        run_async_then_stop(ss, await_into(catch_all_wait(w, hit), s));
         BOOST_TEST(!hit);
         BOOST_TEST(s.ec == cond::canceled);
     }
@@ -1758,7 +1745,7 @@ struct quitter_test
         std::stop_source ss;
         seen s;
         coop_state st;
-        run_then_stop(ss, await_into(coop_quitter(w, st), s));
+        run_async_then_stop(ss, await_into(coop_quitter(w, st), s));
         BOOST_TEST(st.task_finished);
         BOOST_TEST(st.task_ec == cond::canceled);
         BOOST_TEST(st.quitter_alive_then);
@@ -1787,7 +1774,8 @@ struct quitter_test
         seen s;
         int down = 0;
         bool reached = false;
-        run_then_stop(ss, await_into(join_guarded_wait(w, down, reached), s));
+        run_async_then_stop(ss,
+            await_into(join_guarded_wait(w, down, reached), s));
         BOOST_TEST_EQ(down, 2);
         BOOST_TEST(!reached);
         BOOST_TEST(s.ec == cond::canceled);
@@ -1824,7 +1812,7 @@ struct quitter_test
         std::stop_source ss;
         seen s;
         coop_state st;
-        run_then_stop(ss, await_into(quitter_over_task(w, st), s));
+        run_async_then_stop(ss, await_into(quitter_over_task(w, st), s));
         BOOST_TEST(st.task_finished);
         BOOST_TEST(st.task_ec == cond::canceled);
         BOOST_TEST(st.quitter_alive_then);
@@ -1855,7 +1843,7 @@ struct quitter_test
         std::stop_source ss;
         seen s;
         bool reached = false;
-        run_then_stop(ss,
+        run_async_then_stop(ss,
             await_into(lock_after_stop_results(mtx, ss, reached), s));
         BOOST_TEST(!mtx.is_locked());
         BOOST_TEST(!reached);
@@ -1888,7 +1876,7 @@ struct quitter_test
         seen s;
         bool started = false;
         bool reached = false;
-        run_then_stop(ss,
+        run_async_then_stop(ss,
             await_into(join_after_stop(ss, started, reached), s));
         BOOST_TEST(!started);
         BOOST_TEST(!reached);
@@ -1984,7 +1972,7 @@ struct quitter_test
     {
         std::stop_source ss;
         sync_stop_seen out;
-        run_then_stop(ss, await_into(
+        run_async_then_stop(ss, await_into(
             complete_then_yield(by_false, real_result, ss, out), out.s));
         return out;
     }
@@ -2070,7 +2058,7 @@ struct quitter_test
             std::stop_source ss;
             sync_stop_seen out;
             bool same = false;
-            run_then_stop(ss, await_into(
+            run_async_then_stop(ss, await_into(
                 ref_result_then_yield({}, ss, out, same), out.s));
             BOOST_TEST(out.succeeded);
             BOOST_TEST(out.after_first);
@@ -2082,7 +2070,7 @@ struct quitter_test
             std::stop_source ss;
             sync_stop_seen out;
             bool same = false;
-            run_then_stop(ss, await_into(ref_result_then_yield(
+            run_async_then_stop(ss, await_into(ref_result_then_yield(
                 make_error_code(error::canceled), ss, out, same),
                 out.s));
             BOOST_TEST(!out.after_first);
@@ -2175,7 +2163,7 @@ struct quitter_test
             std::stop_source ss;
             sync_stop_seen out;
             bool same = false;
-            run_then_stop(ss, await_into(
+            run_async_then_stop(ss, await_into(
                 rref_result_then_yield(ss, out, same), out.s));
             BOOST_TEST(out.succeeded);
             BOOST_TEST(same);
@@ -2186,7 +2174,7 @@ struct quitter_test
         {
             std::stop_source ss;
             sync_stop_seen out;
-            run_then_stop(ss, await_into(
+            run_async_then_stop(ss, await_into(
                 const_move_only_then_yield(ss, out), out.s));
             BOOST_TEST(out.succeeded);
             BOOST_TEST(out.after_first);
@@ -2212,26 +2200,25 @@ struct quitter_test
         ss.request_stop();
         seen s;
         bool ran = false;
-        run_then_stop(ss, await_into(first_statement(ran), s));
+        run_async_then_stop(ss, await_into(first_statement(ran), s));
         BOOST_TEST(!ran);
         BOOST_TEST(s.resumed);
         BOOST_TEST(s.ec == cond::canceled);
     }
 
     static task<results<>>
-    task_wait(async_waker& w)
+    succeeds()
     {
-        auto [ec] = co_await w.wait();
-        co_return results<>{ec};
+        co_return results<>{};
     }
 
     // The quitter branch is abandoned under its own owner, so the join
-    // sees canceled from it instead of a lost branch.
+    // sees canceled from it instead of a lost branch. The other branch
+    // succeeds, so canceled can only come from the quitter.
     void
     testWhenAllBranchStopNotLost()
     {
-        async_waker w1;
-        async_waker w2;
+        async_waker w;
         std::stop_source ss;
         seen s;
         int down = 0;
@@ -2239,11 +2226,11 @@ struct quitter_test
         auto parent = [&]() -> task<>
         {
             auto r = co_await when_all(
-                guarded_wait(w1, down, reached), task_wait(w2));
+                guarded_wait(w, down, reached), succeeds());
             s.ec = std::get<0>(r);
             s.resumed = true;
         };
-        run_then_stop(ss, parent());
+        run_async_then_stop(ss, parent());
         BOOST_TEST(s.resumed);
         BOOST_TEST(s.ec == cond::canceled);
         BOOST_TEST_EQ(down, 1);
@@ -2279,17 +2266,6 @@ struct quitter_test
         BOOST_TEST(!reached);
     }
 
-    // An opener whose own frame awaits a joined quitter.
-    static quitter<results<>>
-    joins_guarded_wait(
-        async_waker& w, int& down, bool& reached, bool& outer_reached)
-    {
-        raii_counter g(down);
-        std::ignore = co_await guarded_wait(w, down, reached);
-        outer_reached = true;
-        co_return results<>{};
-    }
-
     // The same with a joined quitter below the opener: the teardown
     // destroys the opener's frame, and with it the joined quitter's
     // frame, which is still lent to it.
@@ -2304,14 +2280,12 @@ struct quitter_test
         seen s;
         int down = 0;
         bool reached = false;
-        bool outer_reached = false;
         bool value = false;
         bool error = false;
         run_async(ex, ss.get_token(), std::pmr::new_delete_resource(),
             [&]() { value = true; },
             [&](std::exception_ptr) { error = true; })(
-                await_into(joins_guarded_wait(
-                    w, down, reached, outer_reached), s));
+                await_into(join_guarded_wait(w, down, reached), s));
         ss.request_stop();
         closed = true;
         pump(q);
@@ -2320,7 +2294,6 @@ struct quitter_test
         BOOST_TEST(!s.resumed);
         BOOST_TEST_EQ(down, 2);
         BOOST_TEST(!reached);
-        BOOST_TEST(!outer_reached);
     }
 
     static quitter<results<>>
@@ -2337,7 +2310,7 @@ struct quitter_test
         std::stop_source ss;
         seen s;
         int down = 0;
-        run_then_stop(ss,
+        run_async_then_stop(ss,
             await_into(counted_wait(w, destroy_count_t(down)), s));
         BOOST_TEST_EQ(down, 1);
         BOOST_TEST(s.ec == cond::canceled);
@@ -2377,107 +2350,113 @@ struct quitter_test
         co_return results<>{};
     }
 
+    // Blocks until a handler reports, through a mutex and condition
+    // variable, whose ordering TSan sees on every path.
+    struct completion
+    {
+        std::mutex m;
+        std::condition_variable cv;
+        bool done = false;
+
+        void signal()
+        {
+            std::lock_guard<std::mutex> lock(m);
+            done = true;
+            cv.notify_one();
+        }
+
+        void wait()
+        {
+            std::unique_lock<std::mutex> lock(m);
+            cv.wait(lock, [&] { return done; });
+        }
+    };
+
     // A wake on another thread races the stop: either outcome is
-    // delivered exactly once, and nothing leaks. Both threads start
-    // once the waiter has registered, and one of them is held back by
-    // a varying delay, so both outcomes occur.
+    // delivered exactly once, with one frame destruction and nothing
+    // leaked. Both threads start once the waiter has registered, and
+    // one of them is held back by a delay that varies with `i`.
+    // Returns true if the wake won.
+    static bool
+    race_wake_and_stop(thread_pool& pool, int i)
+    {
+        async_waker w;
+        std::stop_source ss;
+        std::atomic<bool> armed{false};
+        std::atomic<bool> go{false};
+        completion c;
+        seen s;
+        int down = 0;
+        bool reached = false;
+        int handlers = 0;
+        // The parent finished before its handler ran.
+        bool finished_first = false;
+        auto handled = [&]
+        {
+            finished_first = s.resumed;
+            ++handlers;
+            c.signal();
+        };
+        run_async(pool.get_executor(), ss.get_token(),
+            std::pmr::new_delete_resource(),
+            [&]() { handled(); },
+            [&](std::exception_ptr) { handled(); })(
+                await_into(counted_reaching_wait(
+                    w, armed, destroy_count_t(down), reached), s));
+        // Without the delay the same side nearly always claims the
+        // waiter first; varying it lets each side win. Which side
+        // claimed it decides the outcome, not when the gate runs.
+        auto const delay = std::chrono::microseconds(i % 64);
+        bool const hold_stop = i % 2 == 0;
+        auto start = [&](bool held)
+        {
+            while(!go.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            if(!held)
+                return;
+            auto const until = std::chrono::steady_clock::now() + delay;
+            while(std::chrono::steady_clock::now() < until)
+                ;
+        };
+        std::thread waker([&]
+        {
+            start(!hold_stop);
+            w.wake();
+        });
+        std::thread stopper([&]
+        {
+            start(hold_stop);
+            ss.request_stop();
+        });
+        while(!armed.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        go.store(true, std::memory_order_release);
+        waker.join();
+        stopper.join();
+        c.wait();
+        BOOST_TEST_EQ(handlers, 1);
+        BOOST_TEST(finished_first);
+        BOOST_TEST_EQ(down, 1);
+        BOOST_TEST(!s.threw);
+        if(s.ec == cond::canceled)
+        {
+            BOOST_TEST(!reached);
+            return false;
+        }
+        BOOST_TEST(!s.ec);
+        BOOST_TEST(reached);
+        return true;
+    }
+
     void
     testStopRacesCompletion()
     {
-        std::atomic<int> total_handlers{0};
-        int woken = 0;
-        int canceled = 0;
-        {
         thread_pool pool(2);
+        int woken = 0;
         for(int i = 0; i < 10000; ++i)
-        {
-            async_waker w;
-            std::stop_source ss;
-            std::atomic<bool> armed{false};
-            std::atomic<bool> go{false};
-            // A mutex and condition variable, whose ordering TSan sees
-            // on every path, order the handler's writes before the reads.
-            std::mutex m;
-            std::condition_variable cv;
-            bool done = false;
-            seen s;
-            // Counts the frame's destruction even when a stop that
-            // lands first keeps the body from starting.
-            int down = 0;
-            bool reached = false;
-            int handlers = 0;
-            // The parent finished before its handler ran.
-            bool finished_first = false;
-            auto handled = [&]
-            {
-                finished_first = s.resumed;
-                ++handlers;
-                ++total_handlers;
-                std::lock_guard<std::mutex> lock(m);
-                done = true;
-                cv.notify_one();
-            };
-            run_async(pool.get_executor(), ss.get_token(),
-                std::pmr::new_delete_resource(),
-                [&]() { handled(); },
-                [&](std::exception_ptr) { handled(); })(
-                    await_into(counted_reaching_wait(
-                        w, armed, destroy_count_t(down), reached), s));
-            // Without the delay the same side nearly always claims the
-            // waiter first; varying it lets each side win. Which side
-            // claimed it decides the outcome, not when the gate runs.
-            auto const delay = std::chrono::microseconds(i % 64);
-            bool const hold_stop = i % 2 == 0;
-            auto start = [&](bool held)
-            {
-                while(!go.load(std::memory_order_acquire))
-                    std::this_thread::yield();
-                if(!held)
-                    return;
-                auto const until = std::chrono::steady_clock::now() + delay;
-                while(std::chrono::steady_clock::now() < until)
-                    ;
-            };
-            std::thread waker([&]
-            {
-                start(!hold_stop);
-                w.wake();
-            });
-            std::thread stopper([&]
-            {
-                start(hold_stop);
-                ss.request_stop();
-            });
-            while(!armed.load(std::memory_order_acquire))
-                std::this_thread::yield();
-            go.store(true, std::memory_order_release);
-            waker.join();
-            stopper.join();
-            {
-                std::unique_lock<std::mutex> lock(m);
-                cv.wait(lock, [&] { return done; });
-            }
-            BOOST_TEST_EQ(handlers, 1);
-            BOOST_TEST(finished_first);
-            BOOST_TEST_EQ(down, 1);
-            BOOST_TEST(!s.threw);
-            if(s.ec == cond::canceled)
-            {
-                ++canceled;
-                BOOST_TEST(!reached);
-            }
-            else
-            {
-                ++woken;
-                BOOST_TEST(!s.ec);
-                BOOST_TEST(reached);
-            }
-        }
-        }
-        BOOST_TEST_EQ(total_handlers.load(), 10000);
-        BOOST_TEST_EQ(woken + canceled, 10000);
+            woken += race_wake_and_stop(pool, i);
         BOOST_TEST(woken > 0);
-        BOOST_TEST(canceled > 0);
+        BOOST_TEST(woken < 10000);
     }
 
     // Takes the first wakeup, then waits again.
@@ -2775,7 +2754,7 @@ struct quitter_test
         // The unwind recurses once per frame. A depth of 1000 crashed
         // the MSVC 19.51 x64 Debug build, whose main thread has 1 MB.
         constexpr int depth = 100;
-        run_then_stop(ss, await_into(deep_chain(depth, down, w), s));
+        run_async_then_stop(ss, await_into(deep_chain(depth, down, w), s));
         BOOST_TEST_EQ(down, depth);
         BOOST_TEST(s.ec == cond::canceled);
     }
@@ -2859,7 +2838,7 @@ struct quitter_test
             i = v;
             str = t;
         };
-        run_then_stop(ss, parent());
+        run_async_then_stop(ss, parent());
         BOOST_TEST(ec == cond::canceled);
         BOOST_TEST_EQ(i, 0);
         BOOST_TEST(str.empty());
@@ -2887,7 +2866,7 @@ struct quitter_test
         {
             ec = co_await stopped_ec(w, reached);
         };
-        run_then_stop(ss, parent());
+        run_async_then_stop(ss, parent());
         BOOST_TEST(ec == cond::canceled);
         BOOST_TEST(!reached);
     }
@@ -2912,19 +2891,6 @@ struct quitter_test
     // 19. Launchers that drive a quitter directly
     //----------------------------------------------------------
 
-    // Starts `q` with run_async and the given handlers, then stops it.
-    template<class Q, class... H>
-    static void
-    run_async_then_stop(std::stop_source& ss, Q q, H... h)
-    {
-        std::queue<continuation> queue;
-        queuing_executor ex(queue);
-        run_async(ex, ss.get_token(), h...)(std::move(q));
-        pump(queue);
-        ss.request_stop();
-        pump(queue);
-    }
-
     void
     testRunAsyncStoppedResults()
     {
@@ -2943,6 +2909,44 @@ struct quitter_test
         BOOST_TEST(ec == cond::canceled);
         BOOST_TEST_EQ(down, 1);
         BOOST_TEST(!reached);
+    }
+
+    // The value-allocator trampoline destroys the stopped frames before
+    // calling the handler, as the memory_resource one does.
+    void
+    testRunAsyncStoppedWithAllocator()
+    {
+        async_waker w;
+        std::stop_source ss;
+        alloc_counts st;
+        int down = 0;
+        bool reached = false;
+        std::error_code ec;
+        int values = 0;
+        int errors = 0;
+        {
+            std::queue<continuation> queue;
+            queuing_executor ex(queue);
+            run_async(ex, ss.get_token(),
+                counting_allocator<std::byte>(st),
+                [&](results<> r)
+                {
+                    ++values;
+                    ec = std::get<0>(r);
+                    BOOST_TEST_EQ(down, 1);
+                },
+                [&](std::exception_ptr) { ++errors; })(
+                    guarded_wait(w, down, reached));
+            pump(queue);
+            ss.request_stop();
+            pump(queue);
+        }
+        BOOST_TEST_EQ(values, 1);
+        BOOST_TEST_EQ(errors, 0);
+        BOOST_TEST(ec == cond::canceled);
+        BOOST_TEST_EQ(down, 1);
+        BOOST_TEST(!reached);
+        BOOST_TEST(st.balanced());
     }
 
     void
@@ -2990,12 +2994,12 @@ struct quitter_test
         async_waker w;
         std::stop_source ss;
         int values = 0;
-        bool canceled = false;
+        int stops = 0;
         run_async_then_stop(ss, stopped_int(w),
             [&](int) { ++values; },
-            [&](std::exception_ptr ep) { canceled = is_stop(ep); });
+            [&](std::exception_ptr ep) { stops += is_stop(ep); });
         BOOST_TEST_EQ(values, 0);
-        BOOST_TEST(canceled);
+        BOOST_TEST_EQ(stops, 1);
     }
 
     static task<>
@@ -3031,7 +3035,7 @@ struct quitter_test
             {
                 if constexpr(std::is_same_v<
                     std::decay_t<decltype(v)>, std::exception_ptr>)
-                    ++errors;
+                    errors += is_stop(v);
             });
         BOOST_TEST_EQ(errors, 1);
     }
@@ -3298,7 +3302,7 @@ struct quitter_test
         } guard{cleaned};
         started.count_down();
         for(;;)
-            (void)co_await w.wait();
+            std::ignore = co_await w.wait();
     }
 
     // The shape of example/quitter-shutdown: workers with no
@@ -3311,6 +3315,7 @@ struct quitter_test
         test_latch done(workers);
         test_latch started(workers);
         std::atomic<int> cleaned{0};
+        std::atomic<int> stopped{0};
         std::stop_source ss;
         std::array<async_waker, workers> wakers;
         std::vector<strand<thread_pool::executor_type>> strands;
@@ -3319,39 +3324,21 @@ struct quitter_test
         for(int i = 0; i < workers; ++i)
             run_async(strands[i], ss.get_token(),
                 [&]() { done.count_down(); },
-                [&](std::exception_ptr) { done.count_down(); })(
-                    shutdown_worker(wakers[i], cleaned, started));
+                [&](std::exception_ptr ep)
+                {
+                    stopped += is_stop(ep);
+                    done.count_down();
+                })(shutdown_worker(wakers[i], cleaned, started));
         started.wait();
         ss.request_stop();
         done.wait();
         BOOST_TEST_EQ(cleaned.load(), workers);
+        BOOST_TEST_EQ(stopped.load(), workers);
     }
 
     //----------------------------------------------------------
     // 20. Stops across executors and threads
     //----------------------------------------------------------
-
-    // Blocks until a handler reports, through a mutex and condition
-    // variable, whose ordering TSan sees on every path.
-    struct completion
-    {
-        std::mutex m;
-        std::condition_variable cv;
-        bool done = false;
-
-        void signal()
-        {
-            std::lock_guard<std::mutex> lock(m);
-            done = true;
-            cv.notify_one();
-        }
-
-        void wait()
-        {
-            std::unique_lock<std::mutex> lock(m);
-            cv.wait(lock, [&] { return done; });
-        }
-    };
 
     struct hop_state
     {
@@ -3391,7 +3378,8 @@ struct quitter_test
 
     // Records what it got, and whether it resumed on `outer`. The
     // executor is held by value: an executor_ref does not own it. Not a
-    // template, as complete_then_yield is not.
+    // template: GCC 11 applies await_transform twice to a non-dependent
+    // co_await in a coroutine template.
     static task<>
     await_on(
         quitter<results<>> q,
@@ -3814,6 +3802,7 @@ struct quitter_test
         testStoppedResultsDelivered();
         testStoppedErrorCodeDelivered();
         testRunAsyncStoppedResults();
+        testRunAsyncStoppedWithAllocator();
         testRunAsyncStoppedResultsPayload();
         testRunAsyncStoppedVoidCallsErrorHandler();
         testRunAsyncStoppedPlainCallsErrorHandler();

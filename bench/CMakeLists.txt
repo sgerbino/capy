@@ -48,7 +48,6 @@ target_link_libraries(boost_capy_bench_allocation PRIVATE Boost::capy)
 
 add_executable(boost_capy_bench_quitter quitter.cpp)
 target_link_libraries(boost_capy_bench_quitter PRIVATE Boost::capy)
-target_include_directories(boost_capy_bench_quitter PRIVATE .)
 
 if(BOOST_CAPY_BUILD_P2300_EXAMPLES)
     include(FetchContent)

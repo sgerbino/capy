@@ -438,10 +438,10 @@ make_quitter_segment()
     through the owner of its segment (@ref await_context::owner); one
     whose handle is resumed in an environment with no owner cannot stop:
     a debug build asserts, and otherwise the quitter runs on as a
-    @ref task would. A stop that arrives while
-    the execution context is being shut down may end the quitter as a
-    teardown instead, with nothing delivered. Stop the work, wait for it
-    to finish, and only then destroy the context.
+    @ref task would. A stop that arrives while the execution context is
+    being shut down may end the quitter as a teardown instead, with
+    nothing delivered. Stop the work, wait for it to finish, and only
+    then destroy the context.
 
     A stop destroys quitter frames that are suspended at a `co_await`.
     GCC 15.2, and GCC 16 before 2026-07-02, at `-O0`, miscompile such a
@@ -1140,9 +1140,6 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
 
     /** Return the result, rethrow the body's exception, or deliver the stopped value.
 
-        @return The result value for non-void `T`, moved out of the
-        quitter, or the stopped value if the quitter was stopped.
-
         @par Exception Safety
         Basic guarantee. If the body exited via an exception, that
         exception is rethrown. No `std::system_error` is thrown for a
@@ -1150,12 +1147,21 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         `std::error_code` can be stopped while awaited this way. Building
         a `results<Ts...>` stopped value throws only if value-initializing
         or moving one of its `Ts` throws.
+
+        @return The result value for non-void `T`, moved out of the
+        quitter, or the stopped value if the quitter was stopped.
     */
     T await_resume()
     {
         lent_ = false;
-        if(stopped_)
-            return promise_type::stopped_result();
+        // Only an opened segment sets stopped_, and opening one requires
+        // carries_stop_v<T>; a joined quitter<> must not instantiate the
+        // stopped value, which needs exceptions.
+        if constexpr (detail::carries_stop_v<T>)
+        {
+            if(stopped_)
+                return promise_type::stopped_result();
+        }
         auto& p = h_.promise();
         if(p.ep_)
             std::rethrow_exception(p.ep_);
@@ -1233,9 +1239,9 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         quitter is being awaited: the awaiting frame still holds it and
         destroys it again, which has undefined behavior. A holder that
         gives the coroutine up passes its continuation to @ref abandon
-        instead. (Destroying or
-        move-assigning over the quitter object itself while its frame is
-        lent is a different operation, and calls `std::terminate`.)
+        instead. (Destroying or move-assigning over the quitter object
+        itself while its frame is lent is a different operation, and
+        calls `std::terminate`.)
         The quitter's lifetime is normally managed by `run_async`, `run`,
         or the awaiting parent.
 
@@ -1302,6 +1308,8 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     quitter(quitter&& other) noexcept
         : h_(std::exchange(other.h_, nullptr))
     {
+        // A lent quitter's segment still points at `other`.
+        BOOST_CAPY_ASSERT(!other.lent_);
         release_top_ = other.release_top_;
     }
 
@@ -1326,6 +1334,8 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
     {
         if(this != &other)
         {
+            // A lent quitter's segment still points at `other`.
+            BOOST_CAPY_ASSERT(!other.lent_);
             destroy_frame();
             h_ = std::exchange(other.h_, nullptr);
             stopped_ = false;

@@ -1,0 +1,23 @@
+#
+# Copyright (c) 2026 Steve Gerbino
+#
+# Distributed under the Boost Software License, Version 1.0. (See accompanying
+# file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
+#
+# Official repository: https://github.com/cppalliance/capy
+#
+
+import testing ;
+
+project
+    : requirements
+      $(c20-requires)
+      <library>/boost/capy//boost_capy
+      <exception-handling>off
+      <toolset>msvc:<define>_HAS_EXCEPTIONS=0
+      <warnings>extra
+      <warnings-as-errors>on
+    ;
+
+# Compile-only: the launchers need exceptions, so nothing here can run.
+compile quitter.cpp : : no_exceptions_quitter ;

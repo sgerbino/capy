@@ -938,6 +938,58 @@ struct run_test
         BOOST_TEST_EQ(work, 0);
     }
 
+    // A quitter's stop whose unwind a closed inner executor destroys
+    // cannot deliver the stopped value: the parent is torn down.
+    void testClosedInnerExecutorStopIsTeardown()
+    {
+        std::queue<continuation> q, iq;
+        bool closed = false;
+        int work = 0, child_down = 0, parent_down = 0, handlers = 0;
+        bool resumed = false;
+        parked slot;
+        std::stop_source ss;
+        counting_queue_executor caller{&q, &work};
+        closing_executor inner{&iq, &closed};
+        auto child = [](parked* s, destroy_count_t)
+            -> quitter<results<>>
+        {
+            co_await park_awaitable{s};
+            co_return results<>{};
+        };
+        auto parent = [&](destroy_count_t) -> task<void>
+        {
+            std::ignore = co_await capy::run(inner, ss.get_token())(
+                child(&slot, destroy_count_t(child_down)));
+            resumed = true;
+        };
+        run_async(caller,
+            [&]() { ++handlers; },
+            [&](std::exception_ptr) { ++handlers; })(
+                parent(destroy_count_t(parent_down)));
+        while(!q.empty() || !iq.empty())
+        {
+            pump(q);
+            pump(iq);
+        }
+        BOOST_TEST(slot);
+
+        // The void result cannot carry the stop, so the gate stops the
+        // segment, and its unwind is posted to the closed executor.
+        closed = true;
+        ss.request_stop();
+        slot.resume();
+        BOOST_TEST_EQ(child_down, 1);
+        BOOST_TEST(iq.empty());
+        BOOST_TEST_EQ(parent_down, 0);
+        BOOST_TEST_EQ(q.size(), 1u);
+
+        pump(q);
+        BOOST_TEST_EQ(parent_down, 1);
+        BOOST_TEST(!resumed);
+        BOOST_TEST_EQ(handlers, 0);
+        BOOST_TEST_EQ(work, 0);
+    }
+
     // A caller context that drains the posted unwind instead of running
     // it still destroys the parent.
     void testDrainedUnwindDestroysParent()
@@ -1200,6 +1252,7 @@ struct run_test
         testInnerTeardownWithRunExAllocator();
         testDrainedUnwindDestroysParent();
         testClosedInnerExecutorDestroysBoundary();
+        testClosedInnerExecutorStopIsTeardown();
         testRunHoldsCallerWork();
         testDrainedParentReleasesWork();
         testRunExPostThrows();

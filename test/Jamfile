@@ -10,4 +10,5 @@
 
 build-project unit ;
 build-project no_rtti ;
+build-project no_exceptions ;
 build-project doc ;

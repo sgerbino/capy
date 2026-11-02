@@ -280,12 +280,12 @@ void run_benchmark(
     for(std::size_t i = 0; i < 1000; ++i)
         f();
 
-    auto start = std::chrono::high_resolution_clock::now();
+    auto start = std::chrono::steady_clock::now();
 
     for(std::size_t i = 0; i < iterations; ++i)
         f();
 
-    auto end = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
     print_result(name, duration.count() / static_cast<double>(iterations));
 }
@@ -419,6 +419,7 @@ void bench_ready(queue_context& ctx, char const* variant)
     std::snprintf(name, sizeof(name), "ready %s N=%zu", variant, loop_n);
     auto ex = ctx.get_executor();
     std::stop_source ss;
+    ready_sum = 0;
     run_benchmark(name, 20000, [&]{
         run_async(ex, ss.get_token())(drive(ready_body<Coro>(loop_n)));
         ctx.run();

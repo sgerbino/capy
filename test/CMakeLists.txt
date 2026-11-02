@@ -15,4 +15,5 @@ endif()
 
 add_subdirectory(unit)
 add_subdirectory(no_rtti)
+add_subdirectory(no_exceptions)
 add_subdirectory(doc)

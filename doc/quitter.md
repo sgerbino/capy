@@ -203,8 +203,8 @@ When no stop is requested:
   through its gate;
 - a stop-token check at every `co_await`, before the operation starts;
 - nothing more at a completion. Only while a stop is pending is the
-  result taken into the awaiter, checked, and then moved to the body:
-  two moves more than in a `task`;
+  result built in place in the awaiter, checked, and then moved to the
+  body: one move more than in a `task`;
 - a larger object: `sizeof(quitter<T>)` is 32 bytes on 64-bit targets,
   against 16 for `task<T>`. A quitter also holds the handle of the
   segment frame it opened, a function pointer used to unwind it, and a
