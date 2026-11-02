@@ -689,15 +689,13 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             static constexpr bool carries_stop =
                 detail::carries_stop_v<result_type>;
 
-            /// True when taking the result early cannot throw: neither
-            /// the wrapped awaitable's `await_resume` nor holding its
-            /// result.
+            /// True when taking the result early cannot throw. Holding
+            /// it adds nothing that can: a value is constructed in place
+            /// from the `await_resume` call, and a reference is held as
+            /// a pointer.
 #if defined(__cpp_exceptions)
             static constexpr bool resume_noexcept = noexcept(
-                std::declval<std::decay_t<Awaitable>&>().await_resume()) &&
-                (!carries_stop ||
-                    std::is_nothrow_constructible_v<held_type, result_type>
-                    || std::is_reference_v<result_type>);
+                std::declval<std::decay_t<Awaitable>&>().await_resume());
 #else
             static constexpr bool resume_noexcept = true;
 #endif
@@ -785,7 +783,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                     }
                     else
                     {
-                        result_.emplace(a_.await_resume());
+                        result_.emplace(result_in_place{a_});
                     }
                     value_type const& v = held();
                     if constexpr (detail::is_results_v<value_type>)
@@ -807,6 +805,18 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                 return detail::quitter_stop_pending(p_->environment()) &&
                     stops_on_completion();
             }
+
+            // Converts to the await-result in place, so even a const or
+            // move-only prvalue is held without a copy or move.
+            struct result_in_place
+            {
+                std::decay_t<Awaitable>& a;
+
+                operator value_type() const
+                {
+                    return a.await_resume();
+                }
+            };
 
             auto const& held() const noexcept
             {
@@ -1135,9 +1145,11 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
 
         @par Exception Safety
         Basic guarantee. If the body exited via an exception, that
-        exception is rethrown. A stopped value never throws: only a
-        quitter whose `T` is `results<Ts...>` or `std::error_code` can be
-        stopped while awaited this way.
+        exception is rethrown. No `std::system_error` is thrown for a
+        stop: only a quitter whose `T` is `results<Ts...>` or
+        `std::error_code` can be stopped while awaited this way. Building
+        a `results<Ts...>` stopped value throws only if value-initializing
+        or moving one of its `Ts` throws.
     */
     T await_resume()
     {

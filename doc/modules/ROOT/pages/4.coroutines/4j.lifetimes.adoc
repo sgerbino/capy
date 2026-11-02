@@ -171,8 +171,9 @@ include::example$snippets/4j_lifetimes.cpp[tag=unwind]
     without being resumed.
 
 Abandoning is not xref:glossary.adoc#cancellation[cancellation]. To stop work, request a stop on the token the
-work observes: it resumes with an error and returns through its own code.
-Abandoning is what teardown does to work that was not stopped first. See
+work observes: a task resumes with an error and returns through its own code,
+and a quitter is abandoned as described above. Teardown abandons work that was
+not stopped first. See
 xref:4.coroutines/4f.cancellation.adoc[Stop Tokens and Cancellation].
 
 Never call `destroy()` on the handle of a coroutine that another coroutine is

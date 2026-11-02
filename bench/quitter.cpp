@@ -25,6 +25,7 @@
 #include <iomanip>
 #include <iostream>
 #include <stop_token>
+#include <tuple>
 
 
 /* Benchmarks of quitter against task.
@@ -38,9 +39,9 @@
           measures what it costs to start and finish a child.
    ready  One coroutine doing N `co_await`s that complete without
           suspending and return a results<std::size_t>, as an
-          uncontended async_mutex lock does. A quitter takes such a
-          result early, to check it for canceled while a stop is
-          pending, then moves it to the body.
+          uncontended async_mutex lock does. A quitter checks for a
+          pending stop before and after each one; no stop is
+          requested here, so the result goes straight to the body.
    stop   A chain of depth D whose leaf waits on an async_waker that is
           never woken. Only the time from request_stop() until run()
           returns is measured; building and parking the chain is not.
@@ -78,15 +79,23 @@ public:
 
     ~queue_context()
     {
-        // Anything still queued will never run.
-        while(auto* c = pop())
-            boost::capy::abandon(*c);
+        // Anything still queued will never run, including what shutdown
+        // or destroy posts.
         shutdown();
+        abandon_queued();
         destroy();
+        abandon_queued();
     }
 
     executor_type
     get_executor() noexcept;
+
+    void
+    abandon_queued() noexcept
+    {
+        while(auto* c = pop())
+            boost::capy::abandon(*c);
+    }
 
     void
     enqueue(continuation& c) noexcept
@@ -219,6 +228,10 @@ static_assert(ContextAwaitable<yield_awaitable>);
 //
 //-----------------------------------------------
 
+// Always zero. Volatile, so each await reads it and the optimizer cannot
+// fold a task's ready loop into a closed form.
+volatile std::size_t ready_noise = 0;
+
 struct ready_awaitable
 {
     std::size_t n_;
@@ -237,7 +250,7 @@ struct ready_awaitable
 
     results<std::size_t> await_resume() const noexcept
     {
-        return {std::error_code(), n_};
+        return {std::error_code(), n_ + ready_noise};
     }
 };
 
@@ -345,7 +358,7 @@ template<class Coro>
 task<> entry_parent(std::size_t k)
 {
     for(std::size_t i = 0; i < k; ++i)
-        (void)co_await entry_child<Coro>();
+        std::ignore = co_await entry_child<Coro>();
 }
 
 // The leaf waits on a waker nobody wakes; only a stop ends it. A task
@@ -367,7 +380,7 @@ Coro stop_chain(async_waker& w, int depth)
 template<class Coro>
 task<> drive(Coro c)
 {
-    (void)co_await std::move(c);
+    std::ignore = co_await std::move(c);
 }
 
 //-----------------------------------------------
@@ -437,16 +450,26 @@ void bench_stop(queue_context& ctx, char const* variant)
     {
         char name[64];
         std::snprintf(name, sizeof(name), "stop %s D=%d", variant, d);
+        bool ended = true;
         run_timed_benchmark(name, 10000, [&]{
             std::stop_source ss;
             async_waker w;
-            run_async(ex, ss.get_token())(drive(stop_chain<Coro>(w, d)));
+            bool done = false;
+            run_async(ex, ss.get_token(), [&]{ done = true; })(
+                drive(stop_chain<Coro>(w, d)));
             ctx.run();
             auto start = std::chrono::steady_clock::now();
             ss.request_stop();
             ctx.run();
-            return std::chrono::steady_clock::now() - start;
+            auto elapsed = std::chrono::steady_clock::now() - start;
+            ended = ended && done;
+            return elapsed;
         });
+        if(!ended)
+        {
+            std::cout << "FAIL " << name << ": a stop did not end the chain\n";
+            std::exit(1);
+        }
     }
 }
 

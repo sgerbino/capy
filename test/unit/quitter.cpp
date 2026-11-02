@@ -39,6 +39,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <memory_resource>
 #include <mutex>
 #include <queue>
@@ -846,6 +847,8 @@ struct quitter_test
 
         bool child1_returned = false;
         bool child2_returned = false;
+        bool completed = false;
+        bool threw = false;
 
         auto outer = [&]() -> task<>
         {
@@ -856,14 +859,18 @@ struct quitter_test
         };
 
         run_async(pool.get_executor(), source.get_token(),
-            [&]() { done.count_down(); },
-            [&](std::exception_ptr) { done.count_down(); })(
-                outer());
+            [&]() { completed = true; done.count_down(); },
+            [&](std::exception_ptr) {
+                threw = true;
+                done.count_down();
+            })(outer());
 
         registered.wait();
         source.request_stop();
 
         done.wait();
+        BOOST_TEST(completed);
+        BOOST_TEST(!threw);
         // Both quitter children were abandoned before reaching
         // co_return.
         BOOST_TEST(!child1_returned);
@@ -1894,7 +1901,7 @@ struct quitter_test
     struct inline_after_stop_awaitable
     {
         std::stop_source& ss;
-        bool& resumed;
+        int& resumes;
 
         bool await_ready() const noexcept { return false; }
 
@@ -1908,7 +1915,7 @@ struct quitter_test
 
         R await_resume() noexcept
         {
-            resumed = true;
+            ++resumes;
             if constexpr(!std::is_void_v<R>)
                 return R{};
         }
@@ -1919,7 +1926,7 @@ struct quitter_test
     struct false_after_stop_awaitable
     {
         std::stop_source& ss;
-        bool& resumed;
+        int& resumes;
 
         bool await_ready() const noexcept { return false; }
 
@@ -1933,7 +1940,7 @@ struct quitter_test
 
         R await_resume() noexcept
         {
-            resumed = true;
+            ++resumes;
             if constexpr(!std::is_void_v<R>)
                 return R{};
         }
@@ -1942,7 +1949,8 @@ struct quitter_test
     // Where a synchronous completion under a stop left the body.
     struct sync_stop_seen
     {
-        bool resumed = false;
+        int resumes = 0;
+        bool succeeded = false;
         bool after_first = false;
         bool reached = false;
         seen s;
@@ -1957,14 +1965,14 @@ struct quitter_test
     {
         if(by_false && real_result)
             std::ignore = co_await false_after_stop_awaitable<results<>>{
-                ss, out.resumed};
+                ss, out.resumes};
         else if(by_false)
-            co_await false_after_stop_awaitable<void>{ss, out.resumed};
+            co_await false_after_stop_awaitable<void>{ss, out.resumes};
         else if(real_result)
             std::ignore = co_await inline_after_stop_awaitable<results<>>{
-                ss, out.resumed};
+                ss, out.resumes};
         else
-            co_await inline_after_stop_awaitable<void>{ss, out.resumed};
+            co_await inline_after_stop_awaitable<void>{ss, out.resumes};
         out.after_first = true;
         co_await yield_awaitable{};
         out.reached = true;
@@ -1990,7 +1998,7 @@ struct quitter_test
         for(bool by_false : {false, true})
         {
             auto out = run_complete_then_yield(by_false, false);
-            BOOST_TEST(out.resumed);
+            BOOST_TEST_EQ(out.resumes, 1);
             BOOST_TEST(!out.after_first);
             BOOST_TEST(!out.reached);
             BOOST_TEST(out.s.ec == cond::canceled);
@@ -2005,7 +2013,7 @@ struct quitter_test
         for(bool by_false : {false, true})
         {
             auto out = run_complete_then_yield(by_false, true);
-            BOOST_TEST(out.resumed);
+            BOOST_TEST_EQ(out.resumes, 1);
             BOOST_TEST(out.after_first);
             BOOST_TEST(!out.reached);
             BOOST_TEST(out.s.ec == cond::canceled);
@@ -2046,7 +2054,7 @@ struct quitter_test
         std::error_code const& r = co_await
             ref_result_after_stop_awaitable{ss, ec, returned};
         same = &r == returned;
-        out.resumed = !r;
+        out.succeeded = !r;
         out.after_first = true;
         co_await yield_awaitable{};
         out.reached = true;
@@ -2064,7 +2072,7 @@ struct quitter_test
             bool same = false;
             run_then_stop(ss, await_into(
                 ref_result_then_yield({}, ss, out, same), out.s));
-            BOOST_TEST(out.resumed);
+            BOOST_TEST(out.succeeded);
             BOOST_TEST(out.after_first);
             BOOST_TEST(same);
             BOOST_TEST(!out.reached);
@@ -2078,6 +2086,111 @@ struct quitter_test
                 make_error_code(error::canceled), ss, out, same),
                 out.s));
             BOOST_TEST(!out.after_first);
+            BOOST_TEST(out.s.ec == cond::canceled);
+        }
+    }
+
+    // Completes synchronously after requesting a stop, and returns an
+    // rvalue reference to an error_code that outlives the co_await.
+    struct rref_result_after_stop_awaitable
+    {
+        std::stop_source& ss;
+        std::error_code& ec;
+        std::error_code const*& returned;
+
+        bool await_ready() const noexcept { return false; }
+
+        std::coroutine_handle<>
+        await_suspend(
+            std::coroutine_handle<> h, await_context const*) noexcept
+        {
+            ss.request_stop();
+            return h;
+        }
+
+        std::error_code&& await_resume() noexcept
+        {
+            returned = &ec;
+            return std::move(ec);
+        }
+    };
+
+    static quitter<results<>>
+    rref_result_then_yield(
+        std::stop_source& ss, sync_stop_seen& out, bool& same)
+    {
+        std::error_code ec;
+        std::error_code const* returned = nullptr;
+        std::error_code&& r = co_await
+            rref_result_after_stop_awaitable{ss, ec, returned};
+        same = &r == returned;
+        out.succeeded = !r;
+        out.after_first = true;
+        co_await yield_awaitable{};
+        out.reached = true;
+        co_return results<>{};
+    }
+
+    // Completes synchronously after requesting a stop, with a const
+    // results holding a move-only payload.
+    struct const_move_only_after_stop_awaitable
+    {
+        std::stop_source& ss;
+
+        bool await_ready() const noexcept { return false; }
+
+        std::coroutine_handle<>
+        await_suspend(
+            std::coroutine_handle<> h, await_context const*) noexcept
+        {
+            ss.request_stop();
+            return h;
+        }
+
+        results<std::unique_ptr<int>> const await_resume() noexcept
+        {
+            return results<std::unique_ptr<int>>(
+                std::error_code(), std::make_unique<int>(7));
+        }
+    };
+
+    static quitter<results<>>
+    const_move_only_then_yield(std::stop_source& ss, sync_stop_seen& out)
+    {
+        auto&& r = co_await const_move_only_after_stop_awaitable{ss};
+        out.succeeded = !std::get<0>(r) && std::get<1>(r) &&
+            *std::get<1>(r) == 7;
+        out.after_first = true;
+        co_await yield_awaitable{};
+        out.reached = true;
+        co_return results<>{};
+    }
+
+    // Results held by rvalue reference, or as a const move-only value,
+    // decide like any other results: the body receives them.
+    void
+    testOtherResultCategoriesDecide()
+    {
+        {
+            std::stop_source ss;
+            sync_stop_seen out;
+            bool same = false;
+            run_then_stop(ss, await_into(
+                rref_result_then_yield(ss, out, same), out.s));
+            BOOST_TEST(out.succeeded);
+            BOOST_TEST(same);
+            BOOST_TEST(out.after_first);
+            BOOST_TEST(!out.reached);
+            BOOST_TEST(out.s.ec == cond::canceled);
+        }
+        {
+            std::stop_source ss;
+            sync_stop_seen out;
+            run_then_stop(ss, await_into(
+                const_move_only_then_yield(ss, out), out.s));
+            BOOST_TEST(out.succeeded);
+            BOOST_TEST(out.after_first);
+            BOOST_TEST(!out.reached);
             BOOST_TEST(out.s.ec == cond::canceled);
         }
     }
@@ -2282,8 +2395,8 @@ struct quitter_test
             std::stop_source ss;
             std::atomic<bool> armed{false};
             std::atomic<bool> go{false};
-            // A mutex, not a latch: TSan does not see the latch order
-            // the handler's writes before a wait that returns at once.
+            // A mutex and condition variable, whose ordering TSan sees
+            // on every path, order the handler's writes before the reads.
             std::mutex m;
             std::condition_variable cv;
             bool done = false;
@@ -3218,8 +3331,8 @@ struct quitter_test
     // 20. Stops across executors and threads
     //----------------------------------------------------------
 
-    // Blocks until a handler reports, without test_latch, whose
-    // ordering TSan does not see.
+    // Blocks until a handler reports, through a mutex and condition
+    // variable, whose ordering TSan sees on every path.
     struct completion
     {
         std::mutex m;
@@ -3682,6 +3795,7 @@ struct quitter_test
         testSyncVoidCompletionStops();
         testSyncResultCompletionContinues();
         testReferenceResultDecides();
+        testOtherResultCategoriesDecide();
         testStopBeforeFirstResume();
         testWhenAllBranchStopNotLost();
         testOwnerDestroyedByClosedExecutorIsTeardown();

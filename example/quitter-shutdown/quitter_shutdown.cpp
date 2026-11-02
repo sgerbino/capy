@@ -33,7 +33,8 @@
 
      With quitter<>, a stop request ends the worker without
      resuming it: its frame is destroyed, its RAII guards run, and
-     the handler is called.  The worker body is pure business logic.
+     the error handler receives the stop as a std::system_error equal
+     to cond::canceled.  The worker body is pure business logic.
 */
 
 #include <boost/capy.hpp>

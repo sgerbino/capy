@@ -429,7 +429,7 @@ make_trampoline(Ex, Handlers, Alloc)
 
     // Resumed with the task unfinished: the segment was abandoned. A
     // teardown destroys the task without calling a handler; a quitter's
-    // stop reports its stopped value.
+    // stop is reported to the handlers.
     // A stopped quitter's frames are destroyed before its handler runs,
     // as a finished task's destructors have run by then.
     // Only a quitter run by this trampoline is stopped through its
@@ -833,7 +833,7 @@ run_async(Ex ex, std::stop_token st)
     The handler `h1` is called with the result on success, and optionally
     with exception_ptr if it accepts that type.
 
-    A stopped @ref quitter reports its stopped value to the handlers:
+    A stopped @ref quitter reports its stop to the handlers:
     see @ref quitter.
 
     Construct the task as the direct argument of the two-call expression
@@ -871,7 +871,7 @@ run_async(Ex ex, std::stop_token st, H1 h1)
     The stop token is propagated to the task for cooperative cancellation.
     The handler `h1` is called on success, `h2` on failure.
 
-    A stopped @ref quitter reports its stopped value to the handlers:
+    A stopped @ref quitter reports its stop to the handlers:
     see @ref quitter.
 
     Construct the task as the direct argument of the two-call expression
@@ -1008,7 +1008,7 @@ run_async(Ex ex, std::pmr::memory_resource* mr, H1 h1, H2 h2)
 
 /** Bind an executor, a stop token, and a memory resource to produce a launcher. Invoke the launcher with a task to start it.
 
-    A stopped @ref quitter reports its stopped value to the handlers:
+    A stopped @ref quitter reports its stop to the handlers:
     see @ref quitter.
 
     Construct the task as the direct argument of the two-call expression
@@ -1042,7 +1042,7 @@ run_async(Ex ex, std::stop_token st, std::pmr::memory_resource* mr)
 
 /** Bind an executor, a stop token, a memory resource, and a result handler to produce a launcher. Invoke the launcher with a task to start it.
 
-    A stopped @ref quitter reports its stopped value to the handlers:
+    A stopped @ref quitter reports its stop to the handlers:
     see @ref quitter.
 
     Construct the task as the direct argument of the two-call expression
@@ -1078,7 +1078,7 @@ run_async(Ex ex, std::stop_token st, std::pmr::memory_resource* mr, H1 h1)
 
 /** Bind an executor, a stop token, a memory resource, and separate result and error handlers to produce a launcher. Invoke the launcher with a task to start it.
 
-    A stopped @ref quitter reports its stopped value to the handlers:
+    A stopped @ref quitter reports its stop to the handlers:
     see @ref quitter.
 
     Construct the task as the direct argument of the two-call expression
@@ -1211,7 +1211,7 @@ run_async(Ex ex, Alloc alloc, H1 h1, H2 h2)
 
 /** Bind an executor, a stop token, and an allocator to produce a launcher. Invoke the launcher with a task to start it.
 
-    A stopped @ref quitter reports its stopped value to the handlers:
+    A stopped @ref quitter reports its stop to the handlers:
     see @ref quitter.
 
     Construct the task as the direct argument of the two-call expression
@@ -1243,7 +1243,7 @@ run_async(Ex ex, std::stop_token st, Alloc alloc)
 
 /** Bind an executor, a stop token, an allocator, and a result handler to produce a launcher. Invoke the launcher with a task to start it.
 
-    A stopped @ref quitter reports its stopped value to the handlers:
+    A stopped @ref quitter reports its stop to the handlers:
     see @ref quitter.
 
     Construct the task as the direct argument of the two-call expression
@@ -1277,7 +1277,7 @@ run_async(Ex ex, std::stop_token st, Alloc alloc, H1 h1)
 
 /** Bind an executor, a stop token, an allocator, and separate result and error handlers to produce a launcher. Invoke the launcher with a task to start it.
 
-    A stopped @ref quitter reports its stopped value to the handlers:
+    A stopped @ref quitter reports its stop to the handlers:
     see @ref quitter.
 
     Construct the task as the direct argument of the two-call expression
