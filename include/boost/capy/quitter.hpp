@@ -133,8 +133,10 @@ struct quitter_return_base<void>
    results<Ts...>: canceled, with each payload value-initialized.
    std::error_code: canceled.
    Any other T, void included: quitter_stopped, a std::system_error
-   with canceled, thrown at the boundary. A void return would read as
-   success. */
+   with canceled, thrown into run_async's error handler. A void return
+   would read as success. Nothing else awaits such a quitter: a
+   coroutine that is not a quitter cannot, and a quitter awaiting one
+   is stopped together with it. */
 template<class T>
 struct stopped_value
 {
@@ -402,23 +404,24 @@ make_quitter_segment()
         each `Ts` value-initialized; it compares equal to
         `cond::canceled`. Every `Ts` must be default-constructible.
     @li for `std::error_code`: `make_error_code(error::canceled)`.
-    @li for any other `T`, `void` included: no value; an exception of
-        an unspecified type derived from `std::system_error`, whose
-        `code()` compares equal to `cond::canceled`, is thrown. A `void`
-        return would read as success. Such a `quitter<T>` cannot be used
-        where exceptions are disabled: use `quitter<results<>>` there.
+    For any other `T`, `void` included, there is no value that can say
+    the quitter stopped, and a `void` return would read as success. So
+    only a quitter can await such a quitter, and it is stopped together
+    with it. A coroutine that is not a quitter, such as a @ref task,
+    and the @ref run overloads, can await only a `quitter<T>` whose `T`
+    is `results<Ts...>` or `std::error_code`; awaiting any other is
+    ill-formed.
 
     `co_await run(ex)(q)`, and the other @ref run overloads, yield the
     same stopped value. A quitter started by `run_async` reports a stop
     the same way. For `results<Ts...>` and `std::error_code`, the value
     handler receives the stopped value. For any other `T`, the error
-    handler receives the exception. With no error handler, no handler
-    is called and the stop is discarded. This also holds when the
-    exception escapes a @ref task that awaited the quitter: the task is
-    unwound, and with no error handler `run_async` discards the stop.
-    Any other exception, a `std::system_error` with `cond::canceled`
-    included, still calls `std::terminate`. That includes a
-    `std::system_error` copy of the stop that a task throws.
+    handler receives an exception of an unspecified type derived from
+    `std::system_error`, whose `code()` compares equal to
+    `cond::canceled`. With no error handler, no handler is called and
+    the stop is discarded. Such a quitter cannot be started where
+    exceptions are disabled. Any other exception, a `std::system_error`
+    with `cond::canceled` included, still calls `std::terminate`.
 
     @par Await-postcondition
     The quitter's coroutine has completed, has been destroyed by a
@@ -695,8 +698,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             /// stopped: a @ref results or a `std::error_code`, holding
             /// `cond::canceled`.
             static constexpr bool carries_stop =
-                detail::is_results_v<result_type> ||
-                std::is_same_v<result_type, std::error_code>;
+                detail::carries_stop_v<result_type>;
 
             /// True when the wrapped awaitable's `await_resume` cannot
             /// throw.
@@ -1145,6 +1147,11 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         runs with `env`'s executor, stop token and frame allocator, and
         the segment's owner. Control then transfers into the body.
 
+        Only a quitter whose `T` is a @ref results or `std::error_code`
+        can be awaited this way: its stop is reported as a value. Any
+        other quitter is ill-formed here. It can be awaited by a quitter,
+        which stops together with it, or started with @ref run_async.
+
         @param cont The awaiting coroutine to resume when the quitter
         completes or is stopped.
 
@@ -1163,6 +1170,11 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         std::coroutine_handle<> cont,
         await_context const* env)
     {
+        static_assert(detail::carries_stop_v<T>,
+            "only a quitter can await a quitter<T> whose T is not "
+            "results<...> or std::error_code: its stop has no value "
+            "to report. Use quitter<results<...>> or "
+            "quitter<std::error_code>");
         if(env->stop_token.stop_requested())
         {
             stopped_ = true;

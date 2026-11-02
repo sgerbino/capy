@@ -22,6 +22,7 @@
 #include <boost/capy/ex/frame_alloc_mixin.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/await_context.hpp>
+#include <boost/capy/results.hpp>
 
 #include <exception>
 #include <memory_resource>
@@ -309,6 +310,10 @@ struct [[nodiscard]] run_awaitable_ex
             caller_ex_.on_work_finished();
         if constexpr(stops_by_abandonment<Task>)
         {
+            static_assert(
+                carries_stop_v<decltype(inner_.await_resume())>,
+                "run reports a quitter's stop as a value: use "
+                "quitter<results<...>> or quitter<std::error_code>");
             if(tr_.h_ && tr_.h_.promise().segment_.stopped())
                 return Task::promise_type::stopped_result();
         }

@@ -68,26 +68,25 @@ called: a stop that arrives in between does not start the body either.
 |-----|---------------|
 | `results<Ts...>` | `make_error_code(error::canceled)`, each `Ts` value-initialized |
 | `std::error_code` | `make_error_code(error::canceled)` |
-| any other `T`, `void` included | no value; `std::system_error` with a `code()` equal to `cond::canceled` is thrown at the `co_await` |
+| any other `T`, `void` included | none: only a quitter can await it, and stops with it |
 
-Every `Ts` of a `results<Ts...>` must be default-constructible. A
-`quitter<>` or a plain `T` cannot be used without exceptions; use
-`quitter<results<>>` there. The exception is thrown in the coroutine
-that awaits the stopped quitter, never in the stopped quitter's own
-frames. That coroutine can be a quitter's body: inside a quitter,
-`co_await run(st)(q)` throws a stop of `q` there.
+Every `Ts` of a `results<Ts...>` must be default-constructible.
 
-`run_async` reports a stopped quitter to its handlers: for `results`
-and `error_code` the value handler gets the stopped value, and for
-`void` or a plain `T` the error handler gets the `std::system_error`.
-With no error handler, no handler is called and the stop is discarded.
-The same holds for a stop that escapes a task: a task that awaits a
-stopped `quitter<>` or plain-`T` quitter and does not catch the stop
-is unwound, and with no error handler the stop is discarded. Any other exception a task
+A coroutine that is not a quitter, such as a `task`, can await only a
+quitter whose `T` is `results<Ts...>` or `std::error_code`. The same
+holds for `run(ex)(q)` and the other `run` overloads. Awaiting any
+other quitter there is ill-formed. A `quitter<>` or a plain-`T` quitter
+can be awaited by a quitter, which shares its segment and stops
+together with it, or started with `run_async`.
+
+`run_async` reports a stopped quitter to its handlers. For `results`
+and `error_code`, the value handler gets the stopped value. For `void`
+or a plain `T`, the error handler gets a `std::system_error` whose
+`code()` compares equal to `cond::canceled`. With no error handler, no
+handler is called and the stop is discarded. Such a quitter cannot be
+started where exceptions are disabled. Any other exception a task
 throws, a `std::system_error` with `canceled` included, still
-terminates. `run(ex)` and the other
-`run` overloads
-yield the stopped value to their caller.
+terminates.
 
 ## Segments and the gate
 
@@ -255,7 +254,8 @@ task<> outer()
 ```
 
 A `task<T>` keeps explicit error handling: it sees the stop as a
-value, and its own code decides.
+value, and its own code decides. `quitter<std::error_code>` works the
+same way. `when_all` and `when_any` take only `results` children.
 
 ## Design Decisions
 
@@ -309,23 +309,23 @@ body: it receives either a real result or nothing, never a `canceled`
 it has to handle. This is how a sender's operation chooses between
 `set_value` and `set_stopped`.
 
-**Why does a stopped `quitter<>` throw?**
+**Why can't a `task` await a `quitter<>`?**
 
 A `void` return would read as success. In
 `co_await save(); co_await notify_saved();`, the second line would run
-even when `save()` was stopped. So `void` follows the plain-`T` rule:
-a `T` that can hold `canceled` receives it as a value, and any other
-`T` receives a `std::system_error`. The throw happens only where
-something other than a quitter awaits one: a `task` or `run`. A
-quitter awaiting a quitter shares its segment, and both end together
-without a throw.
+even when `save()` was stopped. The stop needs a value that can say
+so, and only `results` and `std::error_code` have one. Throwing it
+instead would make a stop an exception in task code: a
+`catch(std::exception&)` in a retry loop would catch every shutdown
+and spin, and a handler that rethrows a copy of the stop would end
+the program. Inside the quitter world no value is needed: a quitter
+awaiting a quitter shares its segment, and both end together.
 
 **Why does the stop have a private exception type?**
 
-A task that awaits a stopped `quitter<>` and does not catch the stop
-is unwound by it, as a stop unwound the task before. `run_async`'s
-default handler must then drop that stop, but not a real `ECANCELED`
-that a task throws. The stop is thrown as a private type derived from
-`std::system_error`, so callers still catch it as one, and the default
-handler drops only that type. A task that catches the stop and throws
-a `std::system_error` copy of it makes it an ordinary exception.
+`run_async` reports the stop of a `quitter<>` or plain-`T` quitter to
+its error handler, and its default handler drops it. But it must not
+drop a real `ECANCELED` that a task throws. The stop is thrown as a
+private type derived from `std::system_error`, so an error handler
+still catches it as one, and the default handler drops only that
+type.

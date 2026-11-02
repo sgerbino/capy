@@ -15,12 +15,12 @@
 
 #include <system_error>
 
-/* What a stopped quitter<T> throws when T cannot hold canceled (void,
-   or a plain T). It is a std::system_error with canceled, so callers
-   catch it as one. Its own type lets run_async's default_handler drop
-   a quitter's stop that escapes a task, while it still terminates on
-   any other exception, a real ECANCELED included. A handler that
-   catches it and throws a std::system_error copy loses the type.
+/* What run_async reports when it started a quitter<T> whose T cannot
+   hold canceled (void, or a plain T) and the quitter stopped. It is a
+   std::system_error with canceled, so an error handler catches it as
+   one. Its own type lets run_async's default_handler drop the stop,
+   while it still terminates on any other exception, a real ECANCELED
+   included.
    The type is visible so that catch still matches a stop thrown from
    another shared library in a hidden-visibility build. */
 

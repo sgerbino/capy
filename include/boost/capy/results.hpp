@@ -66,6 +66,12 @@ struct is_results<std::tuple<std::error_code, Ts...>>
 template<class T>
 inline constexpr bool is_results_v = is_results<T>::value;
 
+// A result that can say an operation stopped: a results or a
+// std::error_code, holding cond::canceled.
+template<class T>
+inline constexpr bool carries_stop_v =
+    is_results_v<T> || std::is_same_v<T, std::error_code>;
+
 } // namespace detail
 
 } // namespace capy

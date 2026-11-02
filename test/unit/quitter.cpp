@@ -46,6 +46,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -109,8 +110,9 @@ struct quitter_test
             int n = 0;
             test_executor ex(n);
             await_context env{executor_ref(ex), {}, nullptr};
-            auto t = [](parked* s) -> quitter<void> {
+            auto t = [](parked* s) -> quitter<results<>> {
                 co_await park_awaitable{s};
+                co_return results<>{};
             }(&slot);
             lend(t, env);
             // destructor runs with the frame lent and suspended
@@ -124,8 +126,9 @@ struct quitter_test
             int n = 0;
             test_executor ex(n);
             await_context env{executor_ref(ex), {}, nullptr};
-            auto body = [](parked* s) -> quitter<void> {
+            auto body = [](parked* s) -> quitter<results<>> {
                 co_await park_awaitable{s};
+                co_return results<>{};
             };
             auto t = body(&slot);
             lend(t, env);
@@ -137,7 +140,9 @@ struct quitter_test
     void testDestroyUnstartedOrFinishedTaskIsFine()
     {
         BOOST_TEST(exits_cleanly([] {
-            auto body = []() -> quitter<void> { co_return; };
+            auto body = []() -> quitter<results<>> {
+                co_return results<>{};
+            };
             { auto t = body(); }               // never started
             int n = 0;
             test_executor ex(n);
@@ -162,13 +167,14 @@ struct quitter_test
             {
                 co_await park_awaitable{s};
             };
-            auto mid = [&](destroy_count_t) -> quitter<void>
+            auto mid = [&](destroy_count_t) -> quitter<results<>>
             {
                 co_await leaf(&slot, destroy_count_t(leaf_down));
+                co_return results<>{};
             };
             auto root = [&](destroy_count_t) -> task<void>
             {
-                co_await mid(destroy_count_t(mid_down));
+                std::ignore = co_await mid(destroy_count_t(mid_down));
             };
             int n = 0;
             test_executor ex(n);
@@ -432,16 +438,20 @@ struct quitter_test
     // 9. Mixing quitter and task — task awaits quitter
     //----------------------------------------------------------
 
-    static quitter<int>
+    // A task can await only a quitter whose result can say it was
+    // stopped: a results, or a std::error_code.
+    static quitter<results<int>>
     quitter_returns_42()
     {
-        co_return 42;
+        co_return results<int>{std::error_code(), 42};
     }
 
     static task<int>
     task_awaits_quitter()
     {
-        int v = co_await quitter_returns_42();
+        auto [ec, v] = co_await quitter_returns_42();
+        if(ec)
+            co_return -1;
         co_return v + 1;
     }
 
@@ -456,27 +466,24 @@ struct quitter_test
             BOOST_TEST_EQ(result, 43);
         }
 
-        // Stopped case: task awaits stopped quitter — sees exception
+        // Stopped case: the task receives canceled as a value
         {
             std::stop_source source;
             source.request_stop();
 
             int dispatch_count = 0;
             test_executor ex(dispatch_count);
+            int result = 0;
             bool got_exception = false;
 
-            auto t = []() -> task<int>
-            {
-                co_return co_await quitter_returns_42();
-            };
-
             run_async(ex, source.get_token(),
-                [](int) { BOOST_TEST(false); },
-                [&](std::exception_ptr ep) {
-                    got_exception = (ep != nullptr);
-                })(t());
+                [&](int v) { result = v; },
+                [&](std::exception_ptr) {
+                    got_exception = true;
+                })(task_awaits_quitter());
 
-            BOOST_TEST(got_exception);
+            BOOST_TEST_EQ(result, -1);
+            BOOST_TEST(!got_exception);
         }
     }
 
@@ -839,7 +846,7 @@ struct quitter_test
             auto result = co_await when_all(
                 quitter_pending_size(child1_returned, &registered),
                 quitter_pending_size(child2_returned, &registered));
-            (void)result;
+            std::ignore = result;
         };
 
         run_async(pool.get_executor(), source.get_token(),
@@ -942,7 +949,7 @@ struct quitter_test
                 auto result = co_await when_any(
                     quitter_pending_size(child1_returned, &registered),
                     quitter_pending_size(child2_returned, &registered));
-                (void)result;
+                std::ignore = result;
             };
 
             run_async(pool.get_executor(), source.get_token(),
@@ -981,7 +988,7 @@ struct quitter_test
         {
             suspended.count_down();
             auto [ec] = co_await waker.wait();
-            (void)ec;
+            std::ignore = ec;
             reached_end = true;
         };
 
@@ -1243,7 +1250,7 @@ struct quitter_test
         // constructed binding when the frame is destroyed at this
         // co_await (GCC PR c++/124584).
         auto r = co_await mtx.scoped_lock();
-        (void)r;
+        std::ignore = r;
     }
 
     // The stop is already pending when the body reaches the co_await.
@@ -1617,7 +1624,7 @@ struct quitter_test
     {
         raii_counter g(down);
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         reached = true;
         co_return results<>{};
     }
@@ -1648,7 +1655,7 @@ struct quitter_test
         auto parent = [&]() -> task<>
         {
             auto [ec] = co_await guarded_wait(w, down, reached);
-            (void)ec;
+            std::ignore = ec;
             down_at_resume = down;
         };
         run_then_stop(ss, parent());
@@ -1662,7 +1669,7 @@ struct quitter_test
         try
         {
             auto [ec] = co_await w.wait();
-            (void)ec;
+            std::ignore = ec;
         }
         catch(...)
         {
@@ -1707,7 +1714,7 @@ struct quitter_test
     {
         raii_counter g(st.quitter_down);
         auto [ec] = co_await coop_task(w, st);
-        (void)ec;
+        std::ignore = ec;
         st.quitter_reached = true;
         co_return results<>{};
     }
@@ -1735,7 +1742,7 @@ struct quitter_test
     {
         raii_counter g(down);
         auto [ec] = co_await guarded_wait(w, down, reached);
-        (void)ec;
+        std::ignore = ec;
         reached = true;
         co_return results<>{};
     }
@@ -1773,7 +1780,7 @@ struct quitter_test
     {
         raii_counter g(st.quitter_down);
         auto [ec] = co_await task_between(w, st);
-        (void)ec;
+        std::ignore = ec;
         st.quitter_reached = true;
         co_return results<>{};
     }
@@ -1803,7 +1810,7 @@ struct quitter_test
         ss.request_stop();
         // Not a structured binding: see lock_after_stop.
         auto r = co_await mtx.scoped_lock();
-        (void)r;
+        std::ignore = r;
         reached = true;
         co_return results<>{};
     }
@@ -1834,7 +1841,7 @@ struct quitter_test
     {
         ss.request_stop();
         auto r = co_await flag_and_return(started);
-        (void)r;
+        std::ignore = r;
         reached = true;
         co_return results<>{};
     }
@@ -2072,7 +2079,7 @@ struct quitter_test
         bool& reached)
     {
         auto [ec] = co_await armed_wait{w.wait(), &armed};
-        (void)ec;
+        std::ignore = ec;
         reached = true;
         co_return results<>{};
     }
@@ -2228,7 +2235,7 @@ struct quitter_test
     {
         // Not a structured binding: see lock_after_stop.
         auto r = co_await mtx.scoped_lock();
-        (void)r;
+        std::ignore = r;
         locked = mtx.is_locked();
         co_await w.wait();
         reached = true;
@@ -2253,7 +2260,7 @@ struct quitter_test
         auto holder = [&]() -> task<>
         {
             auto r = co_await mtx.lock();
-            (void)r;
+            std::ignore = r;
         };
         run_async(ex)(holder());
         pump(q);
@@ -2295,7 +2302,7 @@ struct quitter_test
             }
             else
             {
-                static_cast<void>(co_await std::move(t));
+                std::ignore = co_await std::move(t);
             }
         }
         catch(test_exception const&)
@@ -2332,7 +2339,7 @@ struct quitter_test
     woken_read(async_waker& w)
     {
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         co_return results<std::size_t>{std::error_code(), 42};
     }
 
@@ -2355,7 +2362,7 @@ struct quitter_test
     woken_canceled_read(async_waker& w)
     {
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         co_return results<std::size_t>{
             make_error_code(error::canceled), 0};
     }
@@ -2374,7 +2381,7 @@ struct quitter_test
     woken_throw(async_waker& w)
     {
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         throw_test_exception("woken_throw");
         co_return results<std::size_t>{}; // LCOV_EXCL_LINE
     }
@@ -2404,7 +2411,7 @@ struct quitter_test
     woken_canceled_ec(async_waker& w)
     {
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         co_return make_error_code(error::canceled);
     }
 
@@ -2434,7 +2441,7 @@ struct quitter_test
     woken_int(async_waker& w)
     {
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         co_return 42;
     }
 
@@ -2456,11 +2463,11 @@ struct quitter_test
         if(depth == 1)
         {
             auto [ec] = co_await w.wait();
-            (void)ec;
+            std::ignore = ec;
             co_return results<>{};
         }
         auto [ec] = co_await deep_chain(depth - 1, down, w);
-        (void)ec;
+        std::ignore = ec;
         co_return results<>{};
     }
 
@@ -2539,7 +2546,7 @@ struct quitter_test
     stopped_payload(async_waker& w)
     {
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         co_return results<int, std::string>{std::error_code(), 7, "x"};
     }
 
@@ -2570,7 +2577,7 @@ struct quitter_test
     stopped_ec(async_waker& w, bool& reached)
     {
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         reached = true;
         co_return std::error_code();
     }
@@ -2595,65 +2602,16 @@ struct quitter_test
     stopped_void(async_waker& w, bool& reached)
     {
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         reached = true;
-    }
-
-    // A void return would read as success, so a stopped quitter<>
-    // throws as a plain T does.
-    void
-    testStoppedVoidThrows()
-    {
-        async_waker w;
-        std::stop_source ss;
-        bool reached = false;
-        bool after = false;
-        bool caught = false;
-        auto parent = [&]() -> task<>
-        {
-            try
-            {
-                co_await stopped_void(w, reached);
-                after = true;
-            }
-            catch(std::system_error const& e)
-            {
-                caught = e.code() == cond::canceled;
-            }
-        };
-        run_then_stop(ss, parent());
-        BOOST_TEST(caught);
-        BOOST_TEST(!after);
-        BOOST_TEST(!reached);
     }
 
     static quitter<int>
     stopped_int(async_waker& w)
     {
         auto [ec] = co_await w.wait();
-        (void)ec;
+        std::ignore = ec;
         co_return 1;
-    }
-
-    void
-    testStoppedPlainThrows()
-    {
-        async_waker w;
-        std::stop_source ss;
-        bool caught = false;
-        auto parent = [&]() -> task<>
-        {
-            try
-            {
-                (void)co_await stopped_int(w);
-            }
-            catch(std::system_error const& e)
-            {
-                caught = e.code() == cond::canceled;
-            }
-        };
-        run_then_stop(ss, parent());
-        BOOST_TEST(caught);
     }
 
     //----------------------------------------------------------
@@ -2794,51 +2752,6 @@ struct quitter_test
         BOOST_TEST_EQ(errors, 1);
     }
 
-    // A quitter's stop that escapes a task is dropped by the default
-    // handler, as on develop: a task that awaits quitter<> workers
-    // and does not catch the stop must not terminate. The task is
-    // unwound by the stop.
-    void
-    testDefaultHandlerDiscardsStopEscapingTask()
-    {
-        // The task awaits the quitter.
-        {
-            async_waker w;
-            std::stop_source ss;
-            bool reached = false;
-            bool after = false;
-            auto parent = [&]() -> task<>
-            {
-                co_await stopped_void(w, reached);
-                after = true;
-            };
-            run_then_stop(ss, parent());
-            BOOST_TEST(!reached);
-            BOOST_TEST(!after);
-        }
-
-        // The task awaits run(ex)(q).
-        {
-            std::queue<continuation> queue;
-            queuing_executor ex(queue);
-            async_waker w;
-            std::stop_source ss;
-            bool reached = false;
-            bool after = false;
-            auto parent = [&]() -> task<>
-            {
-                co_await capy::run(ex)(stopped_void(w, reached));
-                after = true;
-            };
-            run_async(ex, ss.get_token())(parent());
-            pump(queue);
-            ss.request_stop();
-            pump(queue);
-            BOOST_TEST(!reached);
-            BOOST_TEST(!after);
-        }
-    }
-
 #if !defined(_WIN32)
     // Only a quitter's stop is discarded: canceled thrown by a task is
     // an unhandled exception like any other, whatever its category.
@@ -2972,56 +2885,6 @@ struct quitter_test
 
         BOOST_TEST_EQ(values, 0);
         BOOST_TEST_EQ(errors, 0);
-    }
-
-    // run(ex)(q) for a plain T or void throws the stop to its awaiting
-    // parent.
-    template<class Q>
-    static void
-    run_stopped_throws_to_parent(Q (*make)(async_waker&, bool&))
-    {
-        std::queue<continuation> queue;
-        queuing_executor ex(queue);
-        async_waker w;
-        std::stop_source ss;
-        bool reached = false;
-        bool caught = false;
-        bool after = false;
-        auto parent = [&]() -> task<>
-        {
-            try
-            {
-                (void)co_await capy::run(ex)(make(w, reached));
-            }
-            catch(std::system_error const& e)
-            {
-                caught = e.code() == cond::canceled;
-            }
-            after = true;
-        };
-        run_async(ex, ss.get_token())(parent());
-        pump(queue);
-        ss.request_stop();
-        pump(queue);
-        BOOST_TEST(caught);
-        BOOST_TEST(after);
-        BOOST_TEST(!reached);
-    }
-
-    static quitter<int>
-    stopped_int_reaching(async_waker& w, bool& reached)
-    {
-        auto [ec] = co_await w.wait();
-        (void)ec;
-        reached = true;
-        co_return 1;
-    }
-
-    void
-    testRunStoppedPlainThrowsToParent()
-    {
-        run_stopped_throws_to_parent(&stopped_int_reaching);
-        run_stopped_throws_to_parent(&stopped_void);
     }
 
     // run(ex)(q) with a stop already requested: the body never starts.
@@ -3246,7 +3109,7 @@ struct quitter_test
         raii_counter g(st.quitter_down);
         auto [ec] = co_await capy::run(inner.get_executor())(
             task_until_stop(registered, inner.get_executor(), st));
-        (void)ec;
+        std::ignore = ec;
         st.quitter_reached = true;
         co_return results<>{};
     }
@@ -3315,7 +3178,7 @@ struct quitter_test
         auto [ec] = co_await capy::run(inner.get_executor())(
             inner_quitter_until_stop(
                 registered, inner_down, inner_reached));
-        (void)ec;
+        std::ignore = ec;
         st.quitter_reached = true;
         co_return results<>{};
     }
@@ -3496,7 +3359,7 @@ struct quitter_test
         drive_in_callers_segment<quitter<results<>>> d{
             guarded_wait(w, down, reached)};
         auto r = co_await std::move(d);
-        (void)r;
+        std::ignore = r;
     }
 
     struct misuse_outcome
@@ -3672,21 +3535,17 @@ struct quitter_test
         testSegmentNotOnChainAllocator();
         testStoppedResultsDelivered();
         testStoppedErrorCodeDelivered();
-        testStoppedVoidThrows();
-        testStoppedPlainThrows();
         testRunAsyncStoppedResults();
         testRunAsyncStoppedResultsPayload();
         testRunAsyncStoppedVoidCallsErrorHandler();
         testRunAsyncStoppedPlainCallsErrorHandler();
         testDefaultHandlerDiscardsStop();
-        testDefaultHandlerDiscardsStopEscapingTask();
 #if !defined(_WIN32)
         testDefaultHandlerTerminatesOnOtherErrors();
 #endif
         testUserCanceledReachesErrorHandler();
         testRunNoExecutorStopScoped();
         testTeardownStaysSilent();
-        testRunStoppedPlainThrowsToParent();
         testRunStopBeforeStart();
         testRunTokenStopBeforeStart();
         testRunAsyncStopAfterLaunch();

@@ -30,6 +30,7 @@
 #include <new>
 #include <optional>
 #include <stop_token>
+#include <tuple>
 #include <type_traits>
 
 namespace boost {
@@ -294,7 +295,7 @@ struct run_async_trampoline
                 return;
             }
         }
-        (void)stopped;
+        std::ignore = stopped;
         using R = decltype(std::declval<Task&>().await_resume());
         auto& promise = *static_cast<typename Task::promise_type*>(p);
         if(promise.exception())
@@ -411,7 +412,7 @@ struct run_async_trampoline<Ex, Handlers, std::pmr::memory_resource*>
                 return;
             }
         }
-        (void)stopped;
+        std::ignore = stopped;
         using R = decltype(std::declval<Task&>().await_resume());
         auto& promise = *static_cast<typename Task::promise_type*>(p);
         if(promise.exception())
@@ -687,8 +688,7 @@ public:
     the work inside a coroutine. A stopped @ref quitter whose `T` is not
     `results` or `std::error_code` reports its stop to the error
     handler as a `std::system_error` whose `code()` compares equal to
-    `cond::canceled`. With no error handler, that stop is discarded,
-    also when it escapes a task that awaited the quitter.
+    `cond::canceled`. With no error handler, that stop is discarded.
 
     Construct the task as the direct argument of the two-call expression
     `run_async(ex)(task)`.
@@ -725,8 +725,7 @@ run_async(Ex ex)
     The handler `h1` is called with the task's result on success. If `h1`
     is also invocable with `std::exception_ptr`, it handles exceptions too.
     Otherwise, an unhandled exception calls `std::terminate`, except a
-    @ref quitter's stop, which is discarded. That includes a stop that
-    escapes a task that awaited the quitter.
+    @ref quitter's stop, which is discarded.
     If the task is abandoned before it completes, as a context's teardown
     does, no handler is called; the handlers are destroyed with it.
 
