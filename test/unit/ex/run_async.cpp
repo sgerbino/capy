@@ -11,6 +11,7 @@
 // Test that header file is self-contained.
 #include <boost/capy/ex/run_async.hpp>
 
+#include <boost/capy/quitter.hpp>
 #include <boost/capy/task.hpp>
 #include <boost/capy/ex/abandon.hpp>
 #include <boost/capy/ex/execution_context.hpp>
@@ -182,9 +183,13 @@ struct refusing_executor
     void on_work_started() const noexcept { ++*work_; }
     void on_work_finished() const noexcept { --*work_; }
 
+    // Opaque: a dispatch the optimizer can prove never returns lets
+    // clang elide the trampoline and gate frames onto a stack frame
+    // that the throw unwinds before they are destroyed.
     std::coroutine_handle<> dispatch(continuation&) const
     {
-        throw_test_exception("dispatch");
+        throw_test_exception_opaque("dispatch");
+        return std::noop_coroutine(); // LCOV_EXCL_LINE always throws
     }
 
     void post(continuation&) const
@@ -1083,6 +1088,22 @@ struct run_async_test
         BOOST_TEST_EQ(down, 1);
     }
 
+    // The same for a quitter, whose gate is allocated before the
+    // dispatch.
+    void
+    testDispatchThrowsQuitter()
+    {
+        int work = 0;
+        int down = 0;
+        auto t = [](destroy_count_t) -> quitter<> { co_return; }(
+            destroy_count_t(down));
+        BOOST_TEST_THROWS(
+            run_async(refusing_executor{&work})(std::move(t)),
+            test_exception);
+        BOOST_TEST_EQ(work, 0);
+        BOOST_TEST_EQ(down, 1);
+    }
+
     // A task argument that throws leaves no work outstanding.
     void
     testTaskArgumentThrows()
@@ -1100,6 +1121,7 @@ struct run_async_test
         // Basic Functionality
         testNoHandlers();
         testDispatchThrows();
+        testDispatchThrowsQuitter();
         testTaskArgumentThrows();
         testValueAllocator();
         testValueAllocatorAlignsFrames();

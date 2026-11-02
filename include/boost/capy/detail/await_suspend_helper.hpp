@@ -155,7 +155,8 @@ symmetric_transfer(std::coroutine_handle<> h) noexcept
 
     @param a The wrapped awaitable.
 
-    @param h The coroutine performing the `co_await`.
+    @param h The continuation the wrapped awaitable resumes: the
+    coroutine performing the `co_await`, or, for `quitter`, its gate.
 
     @param env The execution environment to pass to the wrapped
     awaitable's `await_suspend`.

@@ -15,17 +15,18 @@
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
+#include <boost/capy/quitter.hpp>
 #include <boost/capy/task.hpp>
 
 #include "test/unit/custom_task.hpp"
 #include "test/unit/death_test.hpp"
 #include "test/unit/test_helpers.hpp"
+#include "test/unit/test_latch.hpp"
 
 #include <boost/capy/ex/strand.hpp>
 #include <boost/capy/ex/thread_pool.hpp>
 #include <boost/capy/test/run_blocking.hpp>
 
-#include <latch>
 #include <memory>
 #include <memory_resource>
 #include <queue>
@@ -585,7 +586,7 @@ struct run_test
         thread_pool pool(2, "str-pool-");
         strand s(pool.get_executor());
         bool inside_strand = false;
-        std::latch done(1);
+        test_latch done(1);
 
         auto inner = [&]() -> task<void> {
             inside_strand = s.running_in_this_thread();
@@ -1037,13 +1038,17 @@ struct run_test
         }
         void on_work_started() const noexcept {}
         void on_work_finished() const noexcept {}
+        // Opaque: an executor the optimizer can prove always throws
+        // lets clang elide coroutine frames onto a stack frame that
+        // the throw unwinds before they are destroyed.
         std::coroutine_handle<> dispatch(continuation&) const
         {
-            throw std::runtime_error("dispatch");
+            throw_test_exception_opaque("dispatch");
+            return std::noop_coroutine(); // LCOV_EXCL_LINE always throws
         }
         void post(continuation&) const
         {
-            throw std::runtime_error("post");
+            throw_test_exception_opaque("post");
         }
     };
 
@@ -1059,6 +1064,38 @@ struct run_test
         counting_queue_executor caller{&q, &work};
         await_context env{executor_ref(caller), {}, nullptr};
         auto child = [](destroy_count_t) -> task<void> { co_return; };
+        {
+            auto aw = capy::run(throwing_post_executor{})(
+                child(destroy_count_t(child_down)));
+            try
+            {
+                std::ignore = aw.await_suspend(std::noop_coroutine(), &env);
+            }
+            catch(std::runtime_error const&)
+            {
+                caught = true;
+            }
+            BOOST_TEST_EQ(work, 0);
+            BOOST_TEST_EQ(child_down, 0);
+        }
+        BOOST_TEST(caught);
+        BOOST_TEST_EQ(child_down, 1);
+        BOOST_TEST(q.empty());
+    }
+
+    // The same for a quitter, which run(ex) starts through a gate it
+    // allocates before the post.
+    void testRunExPostThrowsQuitter()
+    {
+        std::queue<continuation> q;
+        int work = 0, child_down = 0;
+        bool caught = false;
+        counting_queue_executor caller{&q, &work};
+        await_context env{executor_ref(caller), {}, nullptr};
+        auto child = [](destroy_count_t) -> quitter<std::error_code>
+        {
+            co_return std::error_code();
+        };
         {
             auto aw = capy::run(throwing_post_executor{})(
                 child(destroy_count_t(child_down)));
@@ -1166,6 +1203,7 @@ struct run_test
         testRunHoldsCallerWork();
         testDrainedParentReleasesWork();
         testRunExPostThrows();
+        testRunExPostThrowsQuitter();
 #if !defined(_WIN32)
         testDestroyParentAwaitingRunExTerminates();
         testDestroyParentAwaitingRunTerminates();

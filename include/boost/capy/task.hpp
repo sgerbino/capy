@@ -326,10 +326,11 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                 Where `BOOST_CAPY_SYMMETRIC_TRANSFER_WORKAROUND` is on,
                 this function instead returns `bool` from
                 `detail::await_ready_then_suspend`. It first asks the
-                wrapped awaitable's `await_ready`. When that reports
-                ready, it returns `false` to continue without
-                suspending. Otherwise it resumes any returned handle on
-                the current stack and returns `true`. Where the
+                wrapped awaitable's `await_ready`. It returns `false`, to
+                continue without suspending, when that reports ready or
+                when the wrapped `await_suspend` returns `false` or `h`
+                itself. Otherwise it resumes any other returned handle
+                on the current stack and returns `true`. Where the
                 workaround is off, a returned handle is passed back
                 unchanged for symmetric transfer.
             */

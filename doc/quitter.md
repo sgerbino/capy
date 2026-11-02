@@ -52,9 +52,10 @@ value or throws.
 5. The coroutine that awaited the quitter is resumed. Its `co_await`
    yields the stopped value.
 
-If the operation produced a real result instead, because it completed
-before it saw the stop, the body receives that result, and the stop
-takes effect at the next `co_await`.
+If the operation produced a real `results` or `std::error_code`
+instead, because it completed before it saw the stop, the body
+receives that result, and the stop takes effect at the next
+`co_await`. See Completions for every result type.
 
 A stop that is already requested when the quitter is awaited does not
 start the body; the `co_await` yields the stopped value at once.
@@ -85,7 +86,8 @@ or a plain `T`, the error handler gets a `std::system_error` whose
 `code()` compares equal to `cond::canceled`. With no error handler, no
 handler is called and the stop is discarded. Such a quitter cannot be
 started where exceptions are disabled. Any other exception a task
-throws, a `std::system_error` with `canceled` included, still
+throws, a `std::system_error` with `canceled` included, goes to the
+error handler like any exception, and with no error handler
 terminates.
 
 ## Segments and the gate
@@ -106,7 +108,8 @@ returns through its own code before the quitter is destroyed. A
 
 A gate is resumed by the completion of the one operation a quitter
 frame of its segment waits on, or, for the gate through which
-`run_async` or `run(ex)` starts a quitter, by the launcher's dispatch.
+`run_async` or `run(ex)` starts a quitter, by `run_async`'s dispatch
+or `run(ex)`'s post.
 An owner is resumed by the post that follows an abandon. A gate decides
 only once it is resumed, when no operation holds a quitter frame's
 continuation, so no frame is destroyed while an operation still holds

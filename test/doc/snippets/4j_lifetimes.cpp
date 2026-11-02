@@ -23,12 +23,12 @@
 
 #include <cstddef>
 #include <exception>
-#include <latch>
 #include <stop_token>
 #include <string>
 #include <utility>
 
 #include "test_suite.hpp"
+#include "test/unit/test_latch.hpp"
 
 namespace capy = boost::capy;
 
@@ -173,7 +173,7 @@ struct lifetimes_test
 
             // The one worker runs in order, so this runs only once the
             // first coroutine is suspended in wait().
-            std::latch suspended(1);
+            capy::test_latch suspended(1);
             capy::run_async(pool.get_executor(),
                 [&] { suspended.count_down(); })(noop());
             suspended.wait();

@@ -18,9 +18,9 @@
 #include <boost/capy/test/run_blocking.hpp>
 
 #include "test/unit/test_helpers.hpp"
+#include "test/unit/test_latch.hpp"
 
 #include <coroutine>
-#include <latch>
 #include <memory>
 
 namespace boost {
@@ -168,7 +168,7 @@ struct frame_cb_test
     {
         auto pool = std::make_unique<thread_pool>(1);
         auto ex = pool->get_executor();
-        std::latch done(1);
+        test_latch done(1);
         int result = 0;
 
         run_async(ex,

@@ -100,6 +100,31 @@ void invoke_stopped(Handlers& h)
     }
 }
 
+// Report a finished or stopped task to the handlers. The same for every
+// allocator, so both trampolines point invoke_ here.
+template<ContextRunnable Task, class Handlers>
+void
+invoke_handlers(void* p, Handlers& h, bool stopped)
+{
+    if constexpr(stops_by_abandonment<Task>)
+    {
+        if(stopped)
+        {
+            invoke_stopped<Task>(h);
+            return;
+        }
+    }
+    std::ignore = stopped;
+    using R = decltype(std::declval<Task&>().await_resume());
+    auto& promise = *static_cast<typename Task::promise_type*>(p);
+    if(promise.exception())
+        h(promise.exception());
+    else if constexpr(std::is_void_v<R>)
+        h();
+    else
+        h(std::move(promise.result()));
+}
+
 /// Type-erased deallocator implementation for trampoline frames.
 template<class Alloc>
 void dealloc_impl(void* raw, std::size_t total)
@@ -283,28 +308,6 @@ struct run_async_trampoline
     };
 
     std::coroutine_handle<promise_type> h_;
-
-    template<ContextRunnable Task>
-    static void invoke_impl(void* p, Handlers& h, bool stopped)
-    {
-        if constexpr(stops_by_abandonment<Task>)
-        {
-            if(stopped)
-            {
-                invoke_stopped<Task>(h);
-                return;
-            }
-        }
-        std::ignore = stopped;
-        using R = decltype(std::declval<Task&>().await_resume());
-        auto& promise = *static_cast<typename Task::promise_type*>(p);
-        if(promise.exception())
-            h(promise.exception());
-        else if constexpr(std::is_void_v<R>)
-            h();
-        else
-            h(std::move(promise.result()));
-    }
 };
 
 /** Specialization for memory_resource* - stores pointer directly.
@@ -400,28 +403,6 @@ struct run_async_trampoline<Ex, Handlers, std::pmr::memory_resource*>
     };
 
     std::coroutine_handle<promise_type> h_;
-
-    template<ContextRunnable Task>
-    static void invoke_impl(void* p, Handlers& h, bool stopped)
-    {
-        if constexpr(stops_by_abandonment<Task>)
-        {
-            if(stopped)
-            {
-                invoke_stopped<Task>(h);
-                return;
-            }
-        }
-        std::ignore = stopped;
-        using R = decltype(std::declval<Task&>().await_resume());
-        auto& promise = *static_cast<typename Task::promise_type*>(p);
-        if(promise.exception())
-            h(promise.exception());
-        else if constexpr(std::is_void_v<R>)
-            h();
-        else
-            h(std::move(promise.result()));
-    }
 };
 BOOST_CAPY_MSVC_WARNING_POP
 
@@ -642,7 +623,7 @@ public:
         auto& p = tr_.h_.promise();
 
         // Inject Task-specific invoke function
-        p.invoke_ = detail::run_async_trampoline<Ex, Handlers, Alloc>::template invoke_impl<Task>;
+        p.invoke_ = &detail::invoke_handlers<Task, Handlers>;
         p.task_promise_ = &task_promise;
         p.task_h_ = task_h;
         p.stoppable_ = detail::stops_by_abandonment<Task>;
@@ -686,10 +667,7 @@ public:
     With no handlers, the result is discarded. An unhandled exception
     thrown by the task calls `std::terminate`. To catch it instead, pass
     an error handler that receives it as an `exception_ptr`, or `co_await`
-    the work inside a coroutine. A stopped @ref quitter whose `T` is not
-    `results` or `std::error_code` reports its stop to the error
-    handler as a `std::system_error` whose `code()` compares equal to
-    `cond::canceled`. With no error handler, that stop is discarded.
+    the work inside a coroutine.
 
     Construct the task as the direct argument of the two-call expression
     `run_async(ex)(task)`.
@@ -725,8 +703,7 @@ run_async(Ex ex)
 
     The handler `h1` is called with the task's result on success. If `h1`
     is also invocable with `std::exception_ptr`, it handles exceptions too.
-    Otherwise, an unhandled exception calls `std::terminate`, except a
-    @ref quitter's stop, which is discarded.
+    Otherwise, an unhandled exception calls `std::terminate`.
     If the task is abandoned before it completes, as a context's teardown
     does, no handler is called; the handlers are destroyed with it.
 
@@ -810,8 +787,14 @@ run_async(Ex ex, H1 h1, H2 h2)
 
     The stop token is propagated to the task, enabling cooperative
     cancellation. With no handlers, the result is discarded and an
-    unhandled exception calls `std::terminate`. A stopped @ref quitter
-    reports its stopped value to the handlers: see @ref quitter.
+    unhandled exception calls `std::terminate`.
+
+    A stopped @ref quitter reports its stop to the handlers. For a
+    `quitter<T>` whose `T` is `results` or `std::error_code`, the value
+    handler receives the stopped value. For any other `T`, the error
+    handler receives a `std::system_error` whose `code()` compares equal
+    to `cond::canceled`; with no error handler, that stop is discarded.
+    The overloads that take a stop token and handlers behave the same.
 
     Construct the task as the direct argument of the two-call expression
     `run_async(ex)(task)`.

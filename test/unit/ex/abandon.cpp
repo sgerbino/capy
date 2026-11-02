@@ -19,6 +19,7 @@
 #include <boost/capy/ex/thread_pool.hpp>
 #include <boost/capy/task.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
@@ -265,10 +266,12 @@ struct signal_park
     void await_resume() const noexcept {}
 };
 
-// Counts posts and runs nothing.
+// Counts posts and runs nothing. With `poster`, also records the
+// thread that made the last one.
 struct counting_executor
 {
     int* posts;
+    std::thread::id* poster = nullptr;
 
     bool operator==(counting_executor const& o) const noexcept
     {
@@ -288,34 +291,8 @@ struct counting_executor
     void post(continuation&) const
     {
         ++*posts;
-    }
-};
-
-// Counts posts and records the thread that made the last one.
-struct recording_executor
-{
-    int* posts;
-    std::thread::id* poster;
-
-    bool operator==(recording_executor const& o) const noexcept
-    {
-        return posts == o.posts;
-    }
-    test_io_context& context() const noexcept
-    {
-        return default_test_io_context();
-    }
-    void on_work_started() const noexcept {}
-    void on_work_finished() const noexcept {}
-    std::coroutine_handle<> dispatch(continuation& c) const
-    {
-        post(c);
-        return std::noop_coroutine();
-    }
-    void post(continuation&) const
-    {
-        ++*posts;
-        *poster = std::this_thread::get_id();
+        if(poster)
+            *poster = std::this_thread::get_id();
     }
 };
 
@@ -625,7 +602,8 @@ struct abandon_test
         BOOST_TEST_EQ(posts, 1);
     }
 
-    // An abandon caused by a stop is recorded as one.
+    // An abandon caused by a stop is recorded as one, and a later
+    // teardown changes nothing.
     void testAbandonForStopSetsStopped()
     {
         int posts = 0;
@@ -634,6 +612,8 @@ struct abandon_test
         owner.bind(std::noop_coroutine(), ex);
         detail::chain_owner_access::abandon_for_stop(owner);
         BOOST_TEST(owner.abandoned());
+        BOOST_TEST(owner.stopped());
+        owner.abandon();
         BOOST_TEST(owner.stopped());
         BOOST_TEST_EQ(posts, 1);
     }
@@ -654,22 +634,51 @@ struct abandon_test
     }
 
     // A stop and a teardown racing on one segment unwind it once, and
-    // the cause is whichever came first.
+    // the cause is whichever came first. Both threads wait at a start
+    // flag, and alternate which is created first, so either can win.
     void testStopAndTeardownRace()
     {
-        for(int i = 0; i < 10000; ++i)
+        for(int i = 0; i < 2000; ++i)
         {
             int posts = 0;
             std::thread::id poster;
-            recording_executor ex{&posts, &poster};
+            counting_executor ex{&posts, &poster};
             chain_owner owner;
             owner.bind(std::noop_coroutine(), ex);
+            std::atomic<bool> go{false};
+            auto wait_go = [&]
+            {
+                while(!go.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+            };
+            auto teardown_fn = [&]
+            {
+                wait_go();
+                owner.abandon();
+            };
+            auto stop_fn = [&]
+            {
+                wait_go();
+                detail::chain_owner_access::abandon_for_stop(owner);
+            };
+            std::thread first;
+            std::thread second;
             std::thread::id stop_thread;
-            std::thread teardown([&]{ owner.abandon(); });
-            std::thread stop([&]{ detail::chain_owner_access::abandon_for_stop(owner); });
-            stop_thread = stop.get_id();
-            teardown.join();
-            stop.join();
+            if(i % 2 == 0)
+            {
+                first = std::thread(teardown_fn);
+                second = std::thread(stop_fn);
+                stop_thread = second.get_id();
+            }
+            else
+            {
+                first = std::thread(stop_fn);
+                second = std::thread(teardown_fn);
+                stop_thread = first.get_id();
+            }
+            go.store(true, std::memory_order_release);
+            first.join();
+            second.join();
             BOOST_TEST_EQ(posts, 1);
             BOOST_TEST_EQ(owner.stopped(), poster == stop_thread);
             if(posts != 1)

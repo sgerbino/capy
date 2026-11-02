@@ -9,9 +9,12 @@
 
 // Test that header file is self-contained.
 #include <boost/capy/detail/run_callbacks.hpp>
+#include <boost/capy/cond.hpp>
+#include <boost/capy/error.hpp>
 
 #include <exception>
 #include <stdexcept>
+#include <system_error>
 
 #include "test_suite.hpp"
 
@@ -42,6 +45,27 @@ public:
         catch(std::runtime_error const&)
         {
             rethrown = true;
+        }
+        BOOST_TEST(rethrown);
+    }
+
+    // Only a quitter's stop is dropped: a std::system_error with the
+    // same code, thrown by anything else, is rethrown.
+    void
+    test_default_handler_drops_only_quitter_stop()
+    {
+        default_handler h;
+        h(std::make_exception_ptr(quitter_stopped()));
+
+        bool rethrown = false;
+        try
+        {
+            h(std::make_exception_ptr(std::system_error(
+                make_error_code(error::canceled))));
+        }
+        catch(std::system_error const& e)
+        {
+            rethrown = e.code() == cond::canceled;
         }
         BOOST_TEST(rethrown);
     }
@@ -127,6 +151,7 @@ public:
     run()
     {
         test_default_handler();
+        test_default_handler_drops_only_quitter_stop();
         test_handler_pair();
         test_handler_pair_default();
         test_handler_pair_default_invocable();

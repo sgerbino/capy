@@ -27,6 +27,7 @@
 
 #include <coroutine>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <system_error>
 #include <type_traits>
@@ -423,7 +424,8 @@ make_quitter_segment()
     `cond::canceled`. With no error handler, no handler is called and
     the stop is discarded. Such a quitter cannot be started where
     exceptions are disabled. Any other exception, a `std::system_error`
-    with `cond::canceled` included, still calls `std::terminate`.
+    with `cond::canceled` included, goes to the error handler like any
+    exception, and with no error handler calls `std::terminate`.
 
     @par Await-postcondition
     The quitter's coroutine has completed, has been destroyed by a
@@ -672,17 +674,30 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             using result_type = decltype(
                 std::declval<std::decay_t<Awaitable>&>().await_resume());
 
+            /// The await-result type without cv or reference.
+            using value_type = std::remove_cvref_t<result_type>;
+
+            /// How a result taken early is held: a reference result as a
+            /// pointer to what it refers to, any other as a value.
+            using held_type = std::conditional_t<
+                std::is_reference_v<result_type>,
+                std::remove_reference_t<result_type>*, value_type>;
+
             /// True when the await-result can say that the operation
             /// stopped: a @ref results or a `std::error_code`, holding
             /// `cond::canceled`.
             static constexpr bool carries_stop =
                 detail::carries_stop_v<result_type>;
 
-            /// True when the wrapped awaitable's `await_resume` cannot
-            /// throw.
+            /// True when taking the result early cannot throw: neither
+            /// the wrapped awaitable's `await_resume` nor holding its
+            /// result.
 #if defined(__cpp_exceptions)
             static constexpr bool resume_noexcept = noexcept(
-                std::declval<std::decay_t<Awaitable>&>().await_resume());
+                std::declval<std::decay_t<Awaitable>&>().await_resume()) &&
+                (!carries_stop ||
+                    std::is_nothrow_constructible_v<held_type, result_type>
+                    || std::is_reference_v<result_type>);
 #else
             static constexpr bool resume_noexcept = true;
 #endif
@@ -693,7 +708,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             /// The result taken early by @ref stops_on_completion, and
             /// handed over by @ref await_resume.
             std::conditional_t<carries_stop,
-                std::optional<result_type>, empty> result_{};
+                std::optional<held_type>, empty> result_{};
 
             /// The exception the wrapped awaitable's `await_resume`
             /// threw when it was called early, rethrown by
@@ -763,11 +778,20 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             {
                 if constexpr (carries_stop)
                 {
-                    result_.emplace(a_.await_resume());
-                    if constexpr (detail::is_results_v<result_type>)
-                        return std::get<0>(*result_) == cond::canceled;
+                    if constexpr (std::is_reference_v<result_type>)
+                    {
+                        result_type r = a_.await_resume();
+                        result_.emplace(std::addressof(r));
+                    }
                     else
-                        return *result_ == cond::canceled;
+                    {
+                        result_.emplace(a_.await_resume());
+                    }
+                    value_type const& v = held();
+                    if constexpr (detail::is_results_v<value_type>)
+                        return std::get<0>(v) == cond::canceled;
+                    else
+                        return v == cond::canceled;
                 }
                 else
                 {
@@ -782,6 +806,14 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             {
                 return detail::quitter_stop_pending(p_->environment()) &&
                     stops_on_completion();
+            }
+
+            auto const& held() const noexcept
+            {
+                if constexpr (std::is_reference_v<result_type>)
+                    return **result_;
+                else
+                    return *result_;
             }
 
             static bool stops_at_gate(void* self) noexcept
@@ -849,7 +881,13 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                 if constexpr (carries_stop)
                 {
                     if(result_)
-                        return result_type(std::move(*result_));
+                    {
+                        if constexpr (std::is_reference_v<result_type>)
+                            return static_cast<result_type>(**result_);
+                        else
+                            return static_cast<result_type>(
+                                std::move(*result_));
+                    }
                 }
                 return a_.await_resume();
             }
@@ -1096,10 +1134,10 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         quitter, or the stopped value if the quitter was stopped.
 
         @par Exception Safety
-        If the body exited via an exception, that exception is rethrown.
-        If the quitter was stopped and `T` is not `results<Ts...>` or
-        `std::error_code`, a `std::system_error` whose `code()`
-        compares equal to `cond::canceled` is thrown.
+        Basic guarantee. If the body exited via an exception, that
+        exception is rethrown. A stopped value never throws: only a
+        quitter whose `T` is `results<Ts...>` or `std::error_code` can be
+        stopped while awaited this way.
     */
     T await_resume()
     {

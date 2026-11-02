@@ -203,6 +203,19 @@ struct results_test
             std::tuple<int, std::error_code>>);
         static_assert(!detail::is_results_v<std::tuple<>>);
         static_assert(!detail::is_results_v<std::error_code>);
+
+        // A result can say an operation stopped when it is a results
+        // or a std::error_code, however cv- or reference-qualified
+        static_assert(detail::carries_stop_v<results<>>);
+        static_assert(detail::carries_stop_v<results<int>>);
+        static_assert(detail::carries_stop_v<std::error_code>);
+        static_assert(detail::carries_stop_v<std::error_code const&>);
+        static_assert(detail::carries_stop_v<results<int> const>);
+        static_assert(detail::carries_stop_v<results<int>&&>);
+        static_assert(!detail::carries_stop_v<int>);
+        static_assert(!detail::carries_stop_v<void>);
+        static_assert(!detail::carries_stop_v<std::tuple<int>>);
+        static_assert(!detail::carries_stop_v<std::error_condition>);
     }
 
     void

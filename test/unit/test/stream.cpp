@@ -26,10 +26,10 @@
 #include <boost/capy/when_all.hpp>
 
 #include "test/unit/test_helpers.hpp"
+#include "test/unit/test_latch.hpp"
 
 #include <array>
 #include <chrono>
-#include <latch>
 #include <semaphore>
 #include <queue>
 #include <stop_token>
@@ -835,8 +835,8 @@ public:
         // crosses threads; the stream itself is touched solely by the
         // pool thread, honoring its single-threaded contract.
         thread_pool pool(1);
-        std::latch done(1);
-        std::latch suspended(1);
+        test_latch done(1);
+        test_latch suspended(1);
         std::stop_source ss;
 
         auto [a, b] = make_stream_pair();

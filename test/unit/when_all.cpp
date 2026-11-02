@@ -23,9 +23,9 @@
 #include <boost/capy/task.hpp>
 
 #include "test_helpers.hpp"
+#include "test_latch.hpp"
 
 #include <atomic>
-#include <latch>
 #include <memory>
 #include <queue>
 #include <ranges>
@@ -59,7 +59,7 @@ struct when_all_strand_test
     {
         thread_pool pool(2);
         strand s{pool.get_executor()};
-        std::latch done(1);
+        test_latch done(1);
         bool completed = false;
 
         auto outer = [&]() -> task<results<std::tuple<>, std::tuple<>>> {
@@ -89,7 +89,7 @@ struct when_all_strand_test
     {
         thread_pool pool(2);
         strand s{pool.get_executor()};
-        std::latch done(1);
+        test_latch done(1);
         bool completed = false;
         size_t result = 0;
 
@@ -688,7 +688,7 @@ struct when_all_range_test
     {
         thread_pool pool(2);
         strand s{pool.get_executor()};
-        std::latch done(1);
+        test_latch done(1);
         bool completed = false;
         size_t result = 0;
 

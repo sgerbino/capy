@@ -65,9 +65,11 @@ namespace boost::capy::detail {
     It also owns the inner task's segment. Abandoning that segment
     resumes the trampoline on the inner executor, or has a closed
     executor destroy it: either way it destroys the inner task, which
-    unwinds the segment, then abandons the caller's segment, which
-    unwinds the parent on its own executor. The caller's execution
-    context must outlive that.
+    unwinds the segment. After a teardown it then abandons the
+    caller's segment, which unwinds the parent on its own executor.
+    After a quitter's stop it posts the parent instead, whose
+    `co_await` yields the quitter's stopped value. The caller's
+    execution context must outlive that.
 */
 struct boundary_trampoline
 {

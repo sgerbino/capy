@@ -139,6 +139,7 @@ class await_suspend_helper_test
     struct void_awaitable
     {
         bool suspended = false;
+        bool await_ready() const noexcept { return false; }
         void await_suspend(std::coroutine_handle<>, await_context const*)
         {
             suspended = true;
@@ -149,6 +150,7 @@ class await_suspend_helper_test
     struct bool_awaitable
     {
         bool value;
+        bool await_ready() const noexcept { return false; }
         bool await_suspend(std::coroutine_handle<>, await_context const*)
         {
             return value;
@@ -160,6 +162,7 @@ class await_suspend_helper_test
     struct handle_awaitable
     {
         std::coroutine_handle<P> next;
+        bool await_ready() const noexcept { return false; }
         std::coroutine_handle<>
         await_suspend(std::coroutine_handle<>, await_context const*)
         {
@@ -167,7 +170,64 @@ class await_suspend_helper_test
         }
     };
 
+#if BOOST_CAPY_SYMMETRIC_TRANSFER_WORKAROUND
+    // Ready: await_suspend is never called.
+    struct ready_awaitable
+    {
+        bool suspended = false;
+        bool await_ready() const noexcept { return true; }
+        void await_suspend(std::coroutine_handle<>, await_context const*)
+        {
+            suspended = true;
+        }
+    };
+#endif
+
 public:
+#if BOOST_CAPY_SYMMETRIC_TRANSFER_WORKAROUND
+    // Only the workaround uses await_ready_then_suspend: elsewhere
+    // symmetric_transfer hands a handle back instead of resuming it.
+    void
+    testAwaitReadyThenSuspend()
+    {
+        auto const h = std::noop_coroutine();
+        {
+            ready_awaitable ra;
+            BOOST_TEST(!await_ready_then_suspend(ra, h, nullptr));
+            BOOST_TEST(!ra.suspended);
+        }
+        {
+            void_awaitable va;
+            BOOST_TEST(await_ready_then_suspend(va, h, nullptr));
+            BOOST_TEST(va.suspended);
+        }
+        {
+            bool_awaitable bt{true};
+            BOOST_TEST(await_ready_then_suspend(bt, h, nullptr));
+            bool_awaitable bf{false};
+            BOOST_TEST(!await_ready_then_suspend(bf, h, nullptr));
+        }
+        {
+            probe_continuation_ran = false;
+            auto cont = probe_continuation();
+
+            // Returning h itself is a synchronous completion: h is not
+            // resumed, and the caller continues.
+            handle_awaitable<void> self{cont.h};
+            BOOST_TEST(!await_ready_then_suspend(self, cont.h, nullptr));
+            BOOST_TEST(!probe_continuation_ran);
+
+            // Any other handle is resumed, and the caller stays
+            // suspended.
+            handle_awaitable<void> other{cont.h};
+            BOOST_TEST(await_ready_then_suspend(other, h, nullptr));
+            BOOST_TEST(probe_continuation_ran);
+
+            cont.h.destroy();
+        }
+    }
+#endif
+
     // capy#378: transferring out of an await_suspend that has already
     // destroyed its own frame must not touch that frame afterwards.
     // On affected MSVC toolsets symmetric_transfer resumes on the
@@ -198,6 +258,9 @@ public:
     run()
     {
         testDestroyThenTransfer();
+#if BOOST_CAPY_SYMMETRIC_TRANSFER_WORKAROUND
+        testAwaitReadyThenSuspend();
+#endif
 
         auto const h = std::noop_coroutine();
 

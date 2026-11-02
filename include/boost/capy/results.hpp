@@ -67,10 +67,12 @@ template<class T>
 inline constexpr bool is_results_v = is_results<T>::value;
 
 // A result that can say an operation stopped: a results or a
-// std::error_code, holding cond::canceled.
+// std::error_code, holding cond::canceled, however cv- or
+// reference-qualified.
 template<class T>
 inline constexpr bool carries_stop_v =
-    is_results_v<T> || std::is_same_v<T, std::error_code>;
+    is_results_v<std::remove_cvref_t<T>> ||
+    std::is_same_v<std::remove_cvref_t<T>, std::error_code>;
 
 } // namespace detail
 
