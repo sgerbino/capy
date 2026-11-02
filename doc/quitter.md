@@ -45,11 +45,16 @@ value or throws.
 3. The operation does not resume the quitter's frame. Every quitter
    frame hands its operations a *gate* as the continuation, so the
    operation resumes the gate.
-4. The gate sees the stop and abandons the quitter's *segment*. Its
-   owner destroys the quitter frames, on the executor, from the top
-   down. No quitter frame is resumed.
+4. The gate sees the stop and asks the waiting `co_await` whether the
+   operation stopped (see Completions). If it did, the gate abandons
+   the quitter's *segment*. Its owner destroys the quitter frames, on
+   the executor, from the top down. No quitter frame is resumed.
 5. The coroutine that awaited the quitter is resumed. Its `co_await`
    yields the stopped value.
+
+If the operation produced a real result instead, because it completed
+before it saw the stop, the body receives that result, and the stop
+takes effect at the next `co_await`.
 
 A stop that is already requested when the quitter is awaited does not
 start the body; the `co_await` yields the stopped value at once.
@@ -108,24 +113,36 @@ only once it is resumed, when no operation holds a quitter frame's
 continuation, so no frame is destroyed while an operation still holds
 its continuation.
 
-## Synchronous completions
+## Completions
 
 The stop token is checked before each awaited operation starts, so a
 pending stop starts no work.
 
-An operation that completes without going through the gate (its
-`await_ready` returns `true`, or its `await_suspend` returns `false`
-or the handle it was given) always has its `await_resume` called. Its
-`await_ready` or `await_suspend` may already have acquired something,
-such as `async_mutex`'s lock, that only `await_resume` hands over. The
-body receives the result, and the stop takes effect at the next
-suspension.
+Once an operation completes with a stop pending, the operation decides
+what happens, not the timing of the stop. The same rule holds whether
+it completed synchronously (its `await_ready` returns `true`, or its
+`await_suspend` returns `false` or the handle it was given) or through
+the gate. The operation's `await_resume` is called, because its earlier
+steps may already have acquired something, such as `async_mutex`'s
+lock, that only `await_resume` hands over. Its result then decides:
 
-The exception is a `results<>` holding `cond::canceled` while the
-quitter's stop is pending. The operation saw the stop first and
-acquired nothing, so the quitter is stopped at that `co_await`.
-`async_mutex`, `async_event` and `async_waker` all answer a stop that
-lands between the quitter's check and theirs this way.
+| result | the quitter |
+|--------|-------------|
+| `results<Ts...>` or `std::error_code` holding `cond::canceled` | is stopped at that `co_await`: the operation saw the stop and acquired nothing |
+| any other `results<Ts...>` or `std::error_code` | resumes with the result; the stop takes effect at the next `co_await` |
+| any other type, `void` included | is stopped at that `co_await`; the result is destroyed |
+
+`async_mutex`, `async_event` and `async_waker` all answer a stop with a
+`results<>` holding `cond::canceled`. A result of any other type cannot
+say whether the operation stopped, so the stop wins. Delivering it
+would let the body go on as if the operation had succeeded. Nothing is
+lost by destroying it: whatever it owns is released by its destructor,
+and an awaitable that hands over state that is not owned this way
+returns a `results`.
+
+An exception that `await_resume` throws is not a stop. It is kept, and
+rethrown in the body at the `co_await`, where it would have surfaced
+without the stop.
 
 ## Interaction with `when_all` / `when_any`
 
@@ -184,10 +201,9 @@ When no stop is requested:
   one at launch, when `run_async` or `run(ex)` starts the quitter
   through its gate;
 - a stop-token check at every `co_await`, before the operation starts;
-- for an operation that completes without suspending and returns a
-  `results<>`: the result is taken into the awaiter, then moved to the
-  body, two moves more than in a `task`. While a stop is pending, it
-  is also checked for `canceled` first;
+- nothing more at a completion. Only while a stop is pending is the
+  result taken into the awaiter, checked, and then moved to the body:
+  two moves more than in a `task`;
 - a larger object: `sizeof(quitter<T>)` is 32 bytes on 64-bit targets,
   against 16 for `task<T>`. A quitter also holds the handle of the
   segment frame it opened, a function pointer used to unwind it, and a
@@ -209,7 +225,7 @@ quitter<> session(tcp_socket& sock)
     auto [ec, n] = co_await sock.read_some(buf);
     // A stop ends the quitter at the co_await above. We get here
     // after a stop only with a result the read had already produced
-    // (see Synchronous completions).
+    // (see Completions).
     if (ec)
         co_return;
     co_await process(buf, n);
@@ -280,6 +296,18 @@ frame resumes.
 A pending stop then starts no work. Checking later would let an
 operation start, and possibly acquire something, that the body would
 then receive after the stop.
+
+**Why does the operation decide, and not the stop?**
+
+An operation can complete in the window between the stop request and
+the quitter's check: a read has its bytes, or a mutex has handed over
+its lock. Abandoning then would discard a real result. For a lock, the
+awaitable's destructor would have to give it back, which turns a
+teardown-only duty of every awaitable into one that every stop
+exercises. Letting the result decide keeps the stop invisible to the
+body: it receives either a real result or nothing, never a `canceled`
+it has to handle. This is how a sender's operation chooses between
+`set_value` and `set_stopped`.
 
 **Why does a stopped `quitter<>` throw?**
 

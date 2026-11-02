@@ -35,8 +35,8 @@
 /* Stop-aware coroutine task.
 
    quitter<T> is task<T>, except that a stop request ends its frames
-   by abandonment instead of resuming them. Nothing in the body runs
-   after the stop, so nothing can intercept it, and no exception is
+   by abandonment instead of resuming them. The body is never resumed
+   with the stop, so nothing can intercept it, and no exception is
    thrown inside the quitter.
 
    Segment. A quitter awaited by anything other than a quitter opens a
@@ -55,23 +55,28 @@
    Gate. A quitter frame never hands its own handle to an operation. Its
    transform_awaiter records the frame as the gate's target and passes
    the gate's handle instead, so an operation completes into the gate.
-   The gate then resumes the target, or, if a stop was requested,
-   abandons the segment with chain_owner::abandon_for_stop. The
-   operation has finished with the frame by then (the corosio rule: no
-   frame is destroyed while an operation holds its continuation).
+   The gate then resumes the target, or abandons the segment with
+   chain_owner::abandon_for_stop. The operation has finished with the
+   frame by then (the corosio rule: no frame is destroyed while an
+   operation holds its continuation).
 
-   Synchronous completions. The stop is checked before the
-   inner await_ready, so a pending stop starts no work. An inner
-   awaitable that completes without going through the gate (ready,
-   await_suspend returning false or the gate's own handle) always has
-   its await_resume called, so anything it acquired is handed over; the
-   stop takes effect at the next suspension. The exception is a
-   results<> holding cond::canceled while our stop is pending: the
-   inner awaitable saw the stop first and acquired nothing (async_mutex,
-   async_event and async_waker all answer a stop that lands between our
-   check and theirs this way), so the segment is abandoned there. That
-   result is taken early and kept in the awaiter, because await_resume
-   runs in the resumed body, too late to abandon.
+   Completions. The stop is checked before the inner await_ready, so a
+   pending stop starts no work. Once the operation completes, whether
+   synchronously or through the gate, the same rule decides: the
+   operation, not the timing of the stop. With a stop pending, the
+   transform_awaiter takes the result early through the inner
+   await_resume, so anything acquired is handed over. A results or
+   std::error_code holding cond::canceled means the operation saw the
+   stop and acquired nothing (async_mutex, async_event and async_waker
+   all answer a stop this way): the segment is abandoned. Any other
+   results or error_code is real, and the body gets it; the stop takes
+   effect at the next co_await. A result of any other type cannot say
+   whether the operation stopped, so the stop wins. An exception from
+   the early await_resume is not a stop: it is kept and rethrown in the
+   body. The gate reaches the awaiter's check through the stops_ and
+   awaiter_ pointers that the co_await sets before the operation can
+   complete into the gate. The result is taken early because the body's
+   await_resume runs too late to abandon.
 
    Unwind. When the segment's owner is resumed after an abandon, it
    releases the opening quitter's handle and destroys the top frame,
@@ -226,6 +231,10 @@ struct quitter_segment::promise_type
     continuation parent_;
     // The quitter frame waiting in the gate.
     std::coroutine_handle<> target_;
+    // The waiting co_await's check of its completed operation's result,
+    // and its awaiter. Null until the first co_await that suspends.
+    bool (*stops_)(void*) noexcept = nullptr;
+    void* awaiter_ = nullptr;
     // The quitter that opened the segment; null for a gate only.
     quitter_opener* opener_ = nullptr;
     // An unwind is still owed. Cleared when the top frame completes,
@@ -287,7 +296,13 @@ struct quitter_segment::promise_type
             capy::abandon(parent);
             return std::noop_coroutine();
         }
-        if(quitter_stop_pending(frame_env_))
+        // The pending check stays inline: the awaiter's check is an
+        // indirect call, made only on the rare stop path. stops_ is not
+        // reset after use: the gate's handle reaches an operation only
+        // through a transform_awaiter, which sets stops_ first, and
+        // launch_handle() hands it out while stops_ is still null.
+        if(quitter_stop_pending(frame_env_) &&
+            (!stops_ || stops_(awaiter_)))
         {
             stop();
             return std::noop_coroutine();
@@ -349,25 +364,28 @@ make_quitter_segment()
     frame allocator to every `co_await` inside the body.
 
     At every `co_await` in the body, the stop token is checked before
-    the awaited operation is started. An operation that completes
-    asynchronously does not resume the body directly: the stop token is
-    checked again first. If either check finds a stop, the body is not
-    resumed. The quitter's frames are destroyed on the executor, and
-    the coroutine that awaited the quitter is resumed with the stopped
-    value. When `run_async` started the quitter, it reports the stop to
-    its handlers instead, as Await-returns describes.
+    the awaited operation is started, so a pending stop starts no work.
+    When the operation completes with a stop pending, synchronously or
+    not, its result decides whether the body is resumed:
 
-    An operation that completes without suspending always has
-    its `await_resume` called, because its `await_ready` or
-    `await_suspend` may already have acquired a resource, such as
-    `async_mutex`'s lock, that only its `await_resume` hands over. If
-    that result is a @ref results holding `cond::canceled` while a stop
-    is pending, the operation saw the stop first and acquired nothing,
-    so the quitter is stopped at that `co_await`. Any other result is
-    handed to the body, and the stop takes effect at the next
-    suspension. An operation whose result is not a @ref results can
-    therefore hand the body one result it produced after seeing the
-    stop.
+    @li A @ref results or `std::error_code` holding `cond::canceled`:
+        the operation saw the stop and acquired nothing. The body is not
+        resumed.
+    @li Any other @ref results or `std::error_code`: the operation
+        produced a real result, such as `async_mutex`'s lock or the
+        bytes of a read. The body receives it, and the stop takes effect
+        at the next `co_await`.
+    @li A result of any other type, `void` included, cannot say whether
+        the operation stopped. The body is not resumed, and the result
+        is destroyed.
+    @li An exception from the operation is not a stop. The body is
+        resumed, and the exception is thrown at the `co_await`.
+
+    When the body is not resumed, the quitter's frames are destroyed on
+    the executor, and the coroutine that awaited the quitter is resumed
+    with the stopped value. When `run_async` started the quitter, it
+    reports the stop to its handlers instead, as Await-returns
+    describes.
 
     When the body returns or exits via an exception, control transfers
     directly back to the awaiting coroutine.
@@ -673,62 +691,123 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             using result_type = decltype(
                 std::declval<std::decay_t<Awaitable>&>().await_resume());
 
-            /// True when the await-result is a @ref results, which is
-            /// checked for a canceled stop after a synchronous completion.
-            static constexpr bool checks_canceled =
-                detail::is_results_v<result_type>;
+            /// True when the await-result can say that the operation
+            /// stopped: a @ref results or a `std::error_code`, holding
+            /// `cond::canceled`.
+            static constexpr bool carries_stop =
+                detail::is_results_v<result_type> ||
+                std::is_same_v<result_type, std::error_code>;
 
-            /// True when the checks that may call the wrapped awaitable's
-            /// `await_resume` early cannot throw.
-            static constexpr bool checks_noexcept =
-                !checks_canceled || noexcept(
-                    std::declval<std::decay_t<Awaitable>&>().await_resume());
+            /// True when the wrapped awaitable's `await_resume` cannot
+            /// throw.
+#if defined(__cpp_exceptions)
+            static constexpr bool resume_noexcept = noexcept(
+                std::declval<std::decay_t<Awaitable>&>().await_resume());
+#else
+            static constexpr bool resume_noexcept = true;
+#endif
 
-            /// Empty stand-in for @ref result_ when nothing is checked.
-            struct no_result {};
+            /// Empty stand-in for a member that is not needed.
+            struct empty {};
 
-            /// The result of a synchronous completion, taken early by
-            /// @ref stops_on_sync_completion and handed over by
+            /// The result taken early by @ref stops_on_completion, and
+            /// handed over by @ref await_resume.
+            std::conditional_t<carries_stop,
+                std::optional<result_type>, empty> result_{};
+
+            /// The exception the wrapped awaitable's `await_resume`
+            /// threw when it was called early, rethrown by
             /// @ref await_resume.
-            std::conditional_t<checks_canceled,
-                std::optional<result_type>, no_result> result_{};
+            std::conditional_t<resume_noexcept,
+                empty, std::exception_ptr> ep_{};
 
             /// True when the stop takes effect at this `co_await` without
             /// suspending: a stop was pending before the wrapped awaitable
-            /// was touched, or it completed synchronously with a result
-            /// canceled by that stop.
+            /// was touched, or it completed synchronously and
+            /// @ref stops_on_completion ended the quitter.
             bool stop_here_ = false;
 
-            /** Take the result of a synchronous completion, and report
-                whether the stop takes effect here instead.
+            /** Report whether the stop takes effect at this `co_await`,
+                after the wrapped awaitable completed.
 
-                The wrapped awaitable's `await_resume` is always called,
-                because its `await_ready` or `await_suspend` may already
-                have acquired something that only `await_resume` hands
-                over. A @ref results holding `cond::canceled` while our
-                stop is pending saw the stop first and acquired nothing,
-                so the quitter can be abandoned. Any other result is kept
-                for @ref await_resume. A result that is not a
-                @ref results is not taken early.
+                Called, only while a stop is pending, for a synchronous
+                completion, and by the gate for one that went through it.
+                With no stop pending, the body takes the result as usual.
+
+                The result is taken now, through the wrapped awaitable's
+                `await_resume`, so anything the operation acquired is
+                handed over. The operation decides whether it stopped:
+
+                @li A @ref results or `std::error_code` holding
+                    `cond::canceled` saw the stop and acquired nothing:
+                    the quitter is abandoned.
+                @li Any other @ref results or `std::error_code` is a real
+                    result: it is kept for @ref await_resume, and the stop
+                    takes effect at the next `co_await`.
+                @li Any other result cannot say whether the operation
+                    stopped, so the stop wins: the result is discarded,
+                    and the quitter is abandoned.
+
+                An exception thrown by `await_resume` is not a stop. It is
+                kept, and @ref await_resume rethrows it in the body.
 
                 @return `true` if the quitter is abandoned at this
                 `co_await`.
             */
-            bool stops_on_sync_completion() noexcept(checks_noexcept)
+            bool stops_on_completion() noexcept
             {
-                if constexpr (checks_canceled)
+                set_current_frame_allocator(
+                    p_->environment()->frame_allocator);
+                if constexpr (resume_noexcept)
+                {
+                    return take_result();
+                }
+#if defined(__cpp_exceptions)
+                else
+                {
+                    try
+                    {
+                        return take_result();
+                    }
+                    catch(...)
+                    {
+                        ep_ = std::current_exception();
+                        return false;
+                    }
+                }
+#endif
+            }
+
+            // The wrapped awaitable completed while our stop is pending.
+            bool take_result() noexcept(resume_noexcept)
+            {
+                if constexpr (carries_stop)
                 {
                     result_.emplace(a_.await_resume());
-                    // The stop check first: comparing with
-                    // cond::canceled goes through the error category's
-                    // virtual calls, and a stop is rarely pending.
-                    return detail::quitter_stop_pending(p_->environment()) &&
-                        std::get<0>(*result_) == cond::canceled;
+                    if constexpr (detail::is_results_v<result_type>)
+                        return std::get<0>(*result_) == cond::canceled;
+                    else
+                        return *result_ == cond::canceled;
                 }
                 else
                 {
-                    return false;
+                    // Called even though the value is discarded, so that
+                    // anything handed over is destroyed with it.
+                    static_cast<void>(a_.await_resume());
+                    return true;
                 }
+            }
+
+            bool stops_after_sync_completion() noexcept
+            {
+                return detail::quitter_stop_pending(p_->environment()) &&
+                    stops_on_completion();
+            }
+
+            static bool stops_at_gate(void* self) noexcept
+            {
+                return static_cast<transform_awaiter*>(
+                    self)->stops_on_completion();
             }
 
             /** Report whether the `co_await` can continue without
@@ -738,10 +817,9 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                 wrapped awaitable is never touched: this returns `false`,
                 and @ref await_suspend ends the quitter. Otherwise the
                 wrapped awaitable's own `await_ready` decides. A `true`
-                result means it completed synchronously. Its
-                `await_resume` then hands over its result, even if a stop
-                arrives afterwards, unless that result is a @ref results
-                canceled by the stop (see @ref stops_on_sync_completion).
+                result means it completed synchronously, and
+                @ref stops_on_completion decides whether the body takes
+                its result.
 
                 Where `BOOST_CAPY_SYMMETRIC_TRANSFER_WORKAROUND` is on,
                 this always returns `false`, and @ref await_suspend does both
@@ -749,7 +827,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
 
                 @return `true` if no suspension is needed.
             */
-            bool await_ready() noexcept(checks_noexcept)
+            bool await_ready() noexcept
             {
 #if BOOST_CAPY_SYMMETRIC_TRANSFER_WORKAROUND
                 return false;
@@ -761,7 +839,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                 }
                 if(!a_.await_ready())
                     return false;
-                stop_here_ = stops_on_sync_completion();
+                stop_here_ = stops_after_sync_completion();
                 return !stop_here_;
 #endif
             }
@@ -769,18 +847,26 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             /** Restore the frame allocator, then return the wrapped
                 awaitable's result.
 
-                The body is resumed only when the wrapped awaitable
-                completed synchronously, or completed through the gate
-                with no stop requested.
+                The body is resumed only when the stop did not take effect
+                at this `co_await`: see @ref stops_on_completion.
 
                 @return The wrapped awaitable's await-result, forwarded
                 unchanged, or the result already taken from it.
+
+                @throws Any exception the wrapped awaitable's
+                `await_resume` throws, including one it threw when it was
+                called early.
             */
             decltype(auto) await_resume()
             {
                 set_current_frame_allocator(
                     p_->environment()->frame_allocator);
-                if constexpr (checks_canceled)
+                if constexpr (!resume_noexcept)
+                {
+                    if(ep_)
+                        std::rethrow_exception(std::exchange(ep_, nullptr));
+                }
+                if constexpr (carries_stop)
                 {
                     if(result_)
                         return result_type(std::move(*result_));
@@ -796,12 +882,10 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                 destroyed. Otherwise this coroutine becomes the gate's
                 target, and the wrapped awaitable's @ref ContextAwaitable
                 overload is called with the gate's handle and the
-                promise's environment. If that call completes without
-                suspending (returning `false`, or the gate's own handle),
-                this coroutine continues to @ref await_resume without
-                passing through the gate, unless its result is a
-                @ref results canceled by the stop (see
-                @ref stops_on_sync_completion).
+                promise's environment. When the operation completes, a
+                synchronous completion here and one through the gate
+                alike, @ref stops_on_completion decides whether the body
+                takes its result.
 
                 @param h The coroutine performing the `co_await`.
 
@@ -815,7 +899,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
             */
             template<class Promise>
             auto await_suspend(
-                std::coroutine_handle<Promise> h) noexcept(checks_noexcept)
+                std::coroutine_handle<Promise> h) noexcept
             {
                 // After the wrapped awaitable's await_suspend, the gate
                 // may already have run and destroyed this frame on
@@ -830,11 +914,11 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                     seg->stop();
                     return true;
                 }
-                seg->target_ = h;
+                wait_in(seg, h);
                 if(detail::await_ready_then_suspend(
                     a_, seg->handle(), env))
                     return true;
-                if(stops_on_sync_completion())
+                if(stops_after_sync_completion())
                 {
                     seg->stop();
                     return true;
@@ -846,7 +930,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                     seg->stop();
                     return std::coroutine_handle<>(std::noop_coroutine());
                 }
-                seg->target_ = h;
+                wait_in(seg, h);
                 std::coroutine_handle<> gate = seg->handle();
                 using R = decltype(a_.await_suspend(gate, env));
                 if constexpr (std::is_same_v<R, bool>)
@@ -870,6 +954,16 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
 #endif
             }
 
+            // Before the operation can complete into the gate.
+            void wait_in(
+                detail::quitter_segment::promise_type* seg,
+                std::coroutine_handle<> h) noexcept
+            {
+                seg->target_ = h;
+                seg->stops_ = &stops_at_gate;
+                seg->awaiter_ = this;
+            }
+
 #if !BOOST_CAPY_SYMMETRIC_TRANSFER_WORKAROUND
             /** After a synchronous completion in @ref await_suspend,
                 continue to @ref await_resume, or end the quitter.
@@ -877,13 +971,12 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                 @param h The coroutine performing the `co_await`.
 
                 @return `h`, or `std::noop_coroutine()` when the quitter is
-                abandoned here (see @ref stops_on_sync_completion).
+                abandoned here (see @ref stops_on_completion).
             */
             std::coroutine_handle<>
-            continue_or_stop(std::coroutine_handle<> h)
-                noexcept(checks_noexcept)
+            continue_or_stop(std::coroutine_handle<> h) noexcept
             {
-                if(!stops_on_sync_completion())
+                if(!stops_after_sync_completion())
                     return h;
                 p_->seg_->stop();
                 return std::noop_coroutine();

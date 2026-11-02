@@ -286,11 +286,9 @@ struct quitter_test
 
     // stop_only_awaitable as the tests below need it.
     //
-    // A stop that stop_only_awaitable sees in await_suspend makes it
-    // return the awaiting coroutine: a synchronous completion, whose
-    // result quitter inspects. So await_resume reports that stop as
+    // It completes only because of a stop, so await_resume reports
     // canceled, as capy's own awaitables do, and quitter is abandoned
-    // there, just as for a stop that arrives while suspended.
+    // there, whether the stop arrived before or after it suspended.
     //
     // `registered`, when given, is counted down once the awaitable has
     // registered for the stop, so a stop the test requests after
@@ -298,7 +296,6 @@ struct quitter_test
     struct parked_until_stop : stop_only_awaitable
     {
         std::latch* registered;
-        bool canceled = false;
 
         explicit parked_until_stop(
             std::latch* r = nullptr) noexcept
@@ -315,8 +312,6 @@ struct quitter_test
             // await_suspend returns.
             std::latch* r = registered;
             auto next = stop_only_awaitable::await_suspend(h, env);
-            if(next == h)
-                canceled = true;
             if(r)
                 r->count_down();
             return next;
@@ -324,9 +319,7 @@ struct quitter_test
 
         results<> await_resume() noexcept
         {
-            if(canceled)
-                return {make_error_code(error::canceled)};
-            return {{}};
+            return {make_error_code(error::canceled)};
         }
     };
 
@@ -756,8 +749,11 @@ struct quitter_test
         source.request_stop();
         parked.resume();
 
-        // A stopped quitter<> reaches the error handler.
-        BOOST_TEST(!resumed);
+        // A void result cannot say whether the operation stopped, so
+        // the stop wins. await_resume still runs, so that anything it
+        // hands over is destroyed. A stopped quitter<> reaches the
+        // error handler.
+        BOOST_TEST(resumed);
         BOOST_TEST(!completed);
         BOOST_TEST_EQ(stopped, 1);
     }
@@ -1321,10 +1317,12 @@ struct quitter_test
             [&](std::exception_ptr) { ++stopped; })(
                 ready_then_stop(source, resumed));
 
+        // await_resume runs, so that anything it hands over is
+        // destroyed, but a void result cannot say whether the operation
+        // stopped: the stop wins.
         BOOST_TEST(resumed);
-        // Nothing suspends after the co_await, so the body finishes.
-        BOOST_TEST(completed);
-        BOOST_TEST_EQ(stopped, 0);
+        BOOST_TEST(!completed);
+        BOOST_TEST_EQ(stopped, 1);
     }
 
     // Not ready, and await_suspend returns the awaiting coroutine
@@ -1377,10 +1375,12 @@ struct quitter_test
             [&](std::exception_ptr) { ++stopped; })(
                 return_self_then_stop(source, resumed));
 
+        // await_resume runs, so that anything it hands over is
+        // destroyed, but a void result cannot say whether the operation
+        // stopped: the stop wins.
         BOOST_TEST(resumed);
-        // Nothing suspends after the co_await, so the body finishes.
-        BOOST_TEST(completed);
-        BOOST_TEST_EQ(stopped, 0);
+        BOOST_TEST(!completed);
+        BOOST_TEST_EQ(stopped, 1);
     }
 
     // How a sync_results_awaitable completes without suspending.
@@ -2179,9 +2179,23 @@ struct quitter_test
         BOOST_TEST(canceled > 0);
     }
 
+    // Takes the first wakeup, then waits again.
+    static quitter<results<>>
+    wake_then_wait(
+        async_waker& w, int& down, bool& woken, bool& reached)
+    {
+        raii_counter g(down);
+        auto [ec] = co_await w.wait();
+        woken = !ec;
+        co_await w.wait();
+        reached = true;
+        co_return results<>{};
+    }
+
     // The race above, made deterministic: the wake has queued the gate,
-    // and the stop arrives before the gate runs. The gate abandons the
-    // segment, so the body is not resumed.
+    // and the stop arrives before the gate runs. The operation decides:
+    // the wakeup is real, so the body receives it, and the stop takes
+    // effect at the next co_await.
     void
     testStopAfterWakeBeforeGate()
     {
@@ -2191,41 +2205,50 @@ struct quitter_test
         std::stop_source ss;
         seen s;
         int down = 0;
+        bool woken = false;
         bool reached = false;
         run_async(ex, ss.get_token(), std::pmr::new_delete_resource())(
-            await_into(guarded_wait(w, down, reached), s));
+            await_into(wake_then_wait(w, down, woken, reached), s));
         pump(q);
         w.wake();
         BOOST_TEST(!q.empty());
         ss.request_stop();
         pump(q);
+        BOOST_TEST(woken);
         BOOST_TEST(s.resumed);
         BOOST_TEST(s.ec == cond::canceled);
         BOOST_TEST(!reached);
         BOOST_TEST_EQ(down, 1);
     }
 
+    // Takes the lock, then waits while holding it.
     static quitter<results<>>
-    guarded_lock(async_mutex& mtx, bool& reached)
+    lock_then_wait(
+        async_mutex& mtx, async_waker& w, bool& locked, bool& reached)
     {
         // Not a structured binding: see lock_after_stop.
         auto r = co_await mtx.scoped_lock();
         (void)r;
+        locked = mtx.is_locked();
+        co_await w.wait();
         reached = true;
         co_return results<>{};
     }
 
     // The same for a lock: unlock() hands it to the waiter and queues
-    // the gate, and the stop arrives before the gate runs. The lock the
-    // abandoned waiter was handed is released, not leaked.
+    // the gate, and the stop arrives before the gate runs. The body
+    // receives the lock it was granted, and the stop ends it at the
+    // next co_await, where the guard releases the lock.
     void
     testStopAfterGrantBeforeGate()
     {
         std::queue<continuation> q;
         queuing_executor ex(q);
         async_mutex mtx;
+        async_waker w;
         std::stop_source ss;
         seen s;
+        bool locked = false;
         bool reached = false;
         auto holder = [&]() -> task<>
         {
@@ -2236,16 +2259,194 @@ struct quitter_test
         pump(q);
         BOOST_TEST(mtx.is_locked());
         run_async(ex, ss.get_token(), std::pmr::new_delete_resource())(
-            await_into(guarded_lock(mtx, reached), s));
+            await_into(lock_then_wait(mtx, w, locked, reached), s));
         pump(q);
         mtx.unlock();
         BOOST_TEST(!q.empty());
         ss.request_stop();
         pump(q);
+        BOOST_TEST(locked);
         BOOST_TEST(s.resumed);
         BOOST_TEST(s.ec == cond::canceled);
         BOOST_TEST(!reached);
         BOOST_TEST(!mtx.is_locked());
+    }
+
+    // What a quitter's body saw of a task below it.
+    struct body_saw
+    {
+        bool resumed = false;
+        bool threw = false;
+        std::size_t value = 0;
+        bool reached = false;
+    };
+
+    // Awaits `t`, then waits again, where a pending stop ends it.
+    template<class T>
+    static quitter<results<>>
+    await_then_wait(task<T> t, async_waker& w, body_saw& b)
+    {
+        try
+        {
+            if constexpr (std::is_same_v<T, results<std::size_t>>)
+            {
+                auto r = co_await std::move(t);
+                b.value = std::get<1>(r);
+            }
+            else
+            {
+                static_cast<void>(co_await std::move(t));
+            }
+        }
+        catch(test_exception const&)
+        {
+            b.threw = true;
+        }
+        b.resumed = true;
+        co_await w.wait();
+        b.reached = true;
+        co_return results<>{};
+    }
+
+    // Wakes the task made by `make`, then requests the stop before the
+    // task resumes: the task finishes with the stop pending, and its
+    // completion goes through the quitter's gate.
+    template<class Make>
+    static void
+    finish_after_stop(Make make, seen& s, body_saw& b)
+    {
+        std::queue<continuation> q;
+        queuing_executor ex(q);
+        async_waker w;
+        std::stop_source ss;
+        run_async(ex, ss.get_token(), std::pmr::new_delete_resource())(
+            await_into(await_then_wait(make(w), w, b), s));
+        pump(q);
+        w.wake();
+        BOOST_TEST(!q.empty());
+        ss.request_stop();
+        pump(q);
+    }
+
+    static task<results<std::size_t>>
+    woken_read(async_waker& w)
+    {
+        auto [ec] = co_await w.wait();
+        (void)ec;
+        co_return results<std::size_t>{std::error_code(), 42};
+    }
+
+    // A composed operation, such as capy::read, is a task whose
+    // await_resume can throw. Its real result still reaches the body.
+    void
+    testTaskResultAfterStop()
+    {
+        seen s;
+        body_saw b;
+        finish_after_stop(woken_read, s, b);
+        BOOST_TEST(b.resumed);
+        BOOST_TEST(!b.threw);
+        BOOST_TEST_EQ(b.value, 42u);
+        BOOST_TEST(!b.reached);
+        BOOST_TEST(s.ec == cond::canceled);
+    }
+
+    static task<results<std::size_t>>
+    woken_canceled_read(async_waker& w)
+    {
+        auto [ec] = co_await w.wait();
+        (void)ec;
+        co_return results<std::size_t>{
+            make_error_code(error::canceled), 0};
+    }
+
+    void
+    testTaskCanceledAfterStop()
+    {
+        seen s;
+        body_saw b;
+        finish_after_stop(woken_canceled_read, s, b);
+        BOOST_TEST(!b.resumed);
+        BOOST_TEST(s.ec == cond::canceled);
+    }
+
+    static task<results<std::size_t>>
+    woken_throw(async_waker& w)
+    {
+        auto [ec] = co_await w.wait();
+        (void)ec;
+        throw_test_exception("woken_throw");
+        co_return results<std::size_t>{}; // LCOV_EXCL_LINE
+    }
+
+    // An exception is not a stop: the gate keeps it, and the body sees
+    // it at the co_await.
+    void
+    testTaskExceptionAfterStop()
+    {
+        seen s;
+        body_saw b;
+        finish_after_stop(woken_throw, s, b);
+        BOOST_TEST(b.resumed);
+        BOOST_TEST(b.threw);
+        BOOST_TEST(!b.reached);
+        BOOST_TEST(s.ec == cond::canceled);
+    }
+
+    static task<std::error_code>
+    woken_ec(async_waker& w)
+    {
+        auto [ec] = co_await w.wait();
+        co_return ec;
+    }
+
+    static task<std::error_code>
+    woken_canceled_ec(async_waker& w)
+    {
+        auto [ec] = co_await w.wait();
+        (void)ec;
+        co_return make_error_code(error::canceled);
+    }
+
+    // A std::error_code says whether the operation stopped, as a
+    // results does.
+    void
+    testErrorCodeAfterStop()
+    {
+        {
+            seen s;
+            body_saw b;
+            finish_after_stop(woken_ec, s, b);
+            BOOST_TEST(b.resumed);
+            BOOST_TEST(!b.reached);
+            BOOST_TEST(s.ec == cond::canceled);
+        }
+        {
+            seen s;
+            body_saw b;
+            finish_after_stop(woken_canceled_ec, s, b);
+            BOOST_TEST(!b.resumed);
+            BOOST_TEST(s.ec == cond::canceled);
+        }
+    }
+
+    static task<int>
+    woken_int(async_waker& w)
+    {
+        auto [ec] = co_await w.wait();
+        (void)ec;
+        co_return 42;
+    }
+
+    // An int cannot say whether the operation stopped: the stop wins.
+    void
+    testPlainResultAfterStop()
+    {
+        seen s;
+        body_saw b;
+        finish_after_stop(woken_int, s, b);
+        BOOST_TEST(!b.resumed);
+        BOOST_TEST(s.ec == cond::canceled);
     }
 
     static quitter<results<>>
@@ -3462,6 +3663,11 @@ struct quitter_test
         testStopRacesCompletion();
         testStopAfterWakeBeforeGate();
         testStopAfterGrantBeforeGate();
+        testTaskResultAfterStop();
+        testTaskCanceledAfterStop();
+        testTaskExceptionAfterStop();
+        testErrorCodeAfterStop();
+        testPlainResultAfterStop();
         testDeepQuitterChainUnwinds();
         testSegmentNotOnChainAllocator();
         testStoppedResultsDelivered();
