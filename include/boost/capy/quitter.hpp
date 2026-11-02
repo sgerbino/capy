@@ -879,7 +879,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
                 `await_resume` throws, including one it threw when it was
                 called early.
             */
-            decltype(auto) await_resume()
+            result_type await_resume()
             {
                 set_current_frame_allocator(
                     p_->environment()->frame_allocator);
