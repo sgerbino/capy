@@ -35,7 +35,7 @@ public:
 
     void operator()()
     {
-        boost::capy::safe_resume(h_.release()->h);
+        h_.resume();
     }
 };
 

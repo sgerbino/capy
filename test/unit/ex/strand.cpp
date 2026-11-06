@@ -16,7 +16,7 @@
 
 #include <boost/capy/concept/executor.hpp>
 #include <boost/capy/ex/any_executor.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 #include <boost/capy/ex/thread_pool.hpp>
@@ -1017,7 +1017,7 @@ struct strand_test
             // The strand's runner is lost; the chain stays queued.
             while(!q.empty())
             {
-                capy::abandon(q.front());
+                give_up(q.front());
                 q.pop();
             }
             BOOST_TEST_EQ(parent_down, 0);
@@ -1056,7 +1056,7 @@ struct strand_test
         BOOST_TEST_EQ(q.size(), 2u);
         while(!q.empty())
         {
-            capy::abandon(q.front());
+            give_up(q.front());
             q.pop();
         }
         for(int d : down)
@@ -1090,7 +1090,7 @@ struct strand_test
         s->post(chain_holder(conts[0]));
         s->post(chain_holder(conts[1]));
         BOOST_TEST_EQ(q.size(), 1u);
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         for(int d : down)
             BOOST_TEST_EQ(d, 0);
@@ -1178,7 +1178,7 @@ struct strand_test
             ctx->shutdown();
             a.join();
             for(auto& queued : q.v)
-                capy::abandon(queued);
+                give_up(queued);
             q.v.clear();
             s.reset();
             ctx.reset();
@@ -1497,7 +1497,7 @@ struct strand_test
             s.post(chain_holder(ca));
             s.post(chain_holder(cb));
             BOOST_TEST_EQ(q.size(), 1u);
-            capy::abandon(q.front());
+            give_up(q.front());
             q.pop();
         }
         BOOST_TEST_EQ(a_down, 1);
@@ -1544,14 +1544,14 @@ struct strand_test
             strand<queuing_executor> s{queuing_executor(q)};
             s.post(chain_holder(c));
             BOOST_TEST_EQ(q.size(), 1u);
-            capy::abandon(q.front());
+            give_up(q.front());
             q.pop();
             run_async(ex)(pb(std::move(s), &slot_f, destroy_count_t(pb_down)));
         }
         BOOST_TEST(slot_f);
         BOOST_TEST_EQ(pa_down, 0);
 
-        capy::abandon(slot_f);
+        give_up(slot_f);
         BOOST_TEST_EQ(pa_down, 1);
         BOOST_TEST_EQ(pb_down, 1);
     }
@@ -1601,7 +1601,7 @@ struct strand_test
                 s.post(chain_holder(conts[i]));
             }
             BOOST_TEST_EQ(q.size(), 1u);
-            capy::abandon(q.front());
+            give_up(q.front());
             q.pop();
             run_async(ex)(holder(
                 std::move(s), &slot_leaf, destroy_count_t(holder_down)));
@@ -1609,7 +1609,7 @@ struct strand_test
         BOOST_TEST(slot_leaf);
         BOOST_TEST_EQ(parents_down, 0);
 
-        capy::abandon(slot_leaf);
+        give_up(slot_leaf);
         BOOST_TEST_EQ(parents_down, static_cast<int>(count));
         BOOST_TEST_EQ(holder_down, 1);
     }

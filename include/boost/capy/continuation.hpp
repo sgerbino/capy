@@ -77,9 +77,9 @@ public:
 
         Set from the coroutine's @ref await_context when it is parked or
         queued. A holder that gives the coroutine up passes this
-        continuation to @ref abandon, which unwinds the segment from its
+        continuation to a @ref chain_holder, which unwinds the segment from its
         owner. Null for a coroutine with no owner, such as an owner's own
-        continuation, which @ref abandon destroys directly.
+        continuation, which a @ref chain_holder destroys directly.
     */
     chain_owner* owner = nullptr;
 

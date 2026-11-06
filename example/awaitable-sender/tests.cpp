@@ -195,7 +195,7 @@ struct ec_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(capy::chain_holder(cont_));
+        capy::resume_via(env_->executor, cont_);
         return std::noop_coroutine();
     }
 
@@ -219,7 +219,7 @@ struct compound_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(capy::chain_holder(cont_));
+        capy::resume_via(env_->executor, cont_);
         return std::noop_coroutine();
     }
 
@@ -259,7 +259,7 @@ struct void_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(capy::chain_holder(cont_));
+        capy::resume_via(env_->executor, cont_);
         return std::noop_coroutine();
     }
 
@@ -281,7 +281,7 @@ struct value_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(capy::chain_holder(cont_));
+        capy::resume_via(env_->executor, cont_);
         return std::noop_coroutine();
     }
 
@@ -303,7 +303,7 @@ struct throwing_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(capy::chain_holder(cont_));
+        capy::resume_via(env_->executor, cont_);
         return std::noop_coroutine();
     }
 
@@ -648,7 +648,7 @@ struct alloc_probe_op
         *out_ = env->frame_allocator;
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(capy::chain_holder(cont_));
+        capy::resume_via(env_->executor, cont_);
         return std::noop_coroutine();
     }
 
@@ -891,7 +891,7 @@ void test_abandoned_task_completes_stopped()
             {pool_ex, {}}, &out, &done});
     ex::start(op);
     WAIT_OR_DIE(parked);
-    capy::abandon(held);
+    capy::chain_holder doomed(held);
     WAIT_OR_DIE(done);
     CHECK(out.ch == channel::stopped);
 }
@@ -933,7 +933,7 @@ void test_unowned_abandon_completes_stopped()
             {pool_ex, {}}, &out, &done});
     ex::start(op);
     WAIT_OR_DIE(parked);
-    capy::abandon(held);
+    capy::chain_holder doomed(held);
     WAIT_OR_DIE(done);
     CHECK(out.ch == channel::stopped);
 }
@@ -974,7 +974,7 @@ struct abandoning_executor
     void on_work_finished() const noexcept { inner_.on_work_finished(); }
     std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
     {
-        return h.release()->h;
+        return h.take_handle();
     }
     void post(capy::chain_holder&&) const
     {

@@ -385,7 +385,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
 
         @par Preconditions
         The frame is not lent: no parent is suspended awaiting it,
-        unless its chain is being unwound after an @ref abandon.
+        unless its chain is being unwound after it is given up.
         Destroying a lent frame otherwise calls `std::terminate`; end
         a running chain by requesting stop, or by destroying its
         execution context.
@@ -469,7 +469,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         @note Do not call `destroy()` on the returned handle while the
         task is being awaited: the awaiting frame still holds it and
         destroys it again, which has undefined behavior. A holder that
-        gives the coroutine up passes its continuation to @ref abandon
+        gives the coroutine up drops its @ref chain_holder
         instead. (Destroying or
         move-assigning over the task object itself while its frame is
         lent is a different operation, and calls `std::terminate`.)
@@ -478,7 +478,7 @@ struct [[nodiscard]] BOOST_CAPY_CORO_AWAIT_ELIDABLE
         `std::stop_token`.
 
         @note The operation, queue or primitive holding a suspended
-        coroutine gives it up with @ref abandon, through the
+        coroutine gives it up with a @ref chain_holder, through the
         continuation it keeps, never by destroying a handle.
         `handle()` belongs to the owning task object.
 

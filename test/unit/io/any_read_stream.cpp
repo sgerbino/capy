@@ -11,7 +11,7 @@
 #include <boost/capy/io/any_read_stream.hpp>
 
 #include <boost/capy/buffers/make_buffer.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/cond.hpp>
 #include <boost/capy/ex/await_context.hpp>
@@ -699,7 +699,7 @@ public:
             auto unused = s.read_some(mutable_buffer(&d, 1));
         }
         BOOST_TEST_EQ(down, 0);
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(down, 1);
     }
 
@@ -723,7 +723,7 @@ public:
         BOOST_TEST(static_cast<bool>(slot));
         s.reset();
         BOOST_TEST_EQ(down, 1);
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(down, 1);
     }
 
@@ -751,9 +751,9 @@ public:
         BOOST_TEST_EQ(down, 1);
         run_async(ex)(op(s));
         BOOST_TEST(static_cast<bool>(second));
-        capy::abandon(first);
+        give_up(first);
         BOOST_TEST_EQ(down, 1);
-        capy::abandon(second);
+        give_up(second);
         BOOST_TEST_EQ(down, 2);
     }
 
@@ -783,7 +783,7 @@ public:
         BOOST_TEST_EQ(st.ops_down, 1);
         BOOST_TEST_EQ(st.late, 0);
 
-        capy::abandon(st.slot);
+        give_up(st.slot);
         BOOST_TEST_EQ(st.ops_down, 1);
     }
 

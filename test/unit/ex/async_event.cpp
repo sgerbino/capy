@@ -12,7 +12,7 @@
 
 #include <boost/capy/concept/context_awaitable.hpp>
 #include <boost/capy/error.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/strand.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/await_context.hpp>
@@ -799,7 +799,7 @@ struct async_event_test
         pump(q);
         BOOST_TEST(slot);
 
-        capy::abandon(slot);
+        give_up(slot);
         // Run only the posted unwind; the canceled waiters it posts
         // stay queued.
         BOOST_TEST_EQ(q.size(), 1u);
@@ -819,7 +819,7 @@ struct async_event_test
         }
         while(!q.empty())
         {
-            capy::abandon(q.front());
+            give_up(q.front());
             q.pop();
         }
         BOOST_TEST_EQ(canceled, count / 2);
@@ -892,7 +892,7 @@ struct async_event_test
         pump(q2);
         BOOST_TEST(slot);
         ctx->shutdown();
-        capy::abandon(slot);
+        give_up(slot);
         pump(q2);
         BOOST_TEST_EQ(down, 1);
     }
@@ -915,7 +915,7 @@ struct async_event_test
         ss.request_stop();
         BOOST_TEST_EQ(q.size(), 1u);
         p.reset();
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         pump(q);
         BOOST_TEST_EQ(down, 1);

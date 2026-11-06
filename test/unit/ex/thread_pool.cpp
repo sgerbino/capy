@@ -1062,7 +1062,7 @@ struct thread_pool_test
         if(!BOOST_TEST(parked.try_acquire_for(std::chrono::seconds(30))))
             return;
 
-        capy::abandon(slot);
+        give_up(slot);
         pool.join();
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(parent_down, 1);

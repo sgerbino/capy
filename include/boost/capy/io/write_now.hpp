@@ -20,7 +20,7 @@
 #include <coroutine>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/results.hpp>
 
@@ -65,8 +65,8 @@ namespace capy {
     completed (i.e., the returned awaitable is fully consumed).
 
     Destroying the returned operation object while it is being awaited
-    calls `std::terminate`, except while its chain is unwound after an
-    @ref abandon.
+    calls `std::terminate`, except while its chain is unwound after it
+    is given up.
 
     @par Example
 

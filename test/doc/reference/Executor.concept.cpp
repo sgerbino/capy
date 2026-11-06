@@ -53,7 +53,7 @@ public:
         capy::chain_holder&& h ) const
     {
         if( std::this_thread::get_id() == home_ )
-            return h.release()->h; // symmetric transfer
+            return h.take_handle(); // symmetric transfer
         post( std::move( h ) );
         return std::noop_coroutine();
     }

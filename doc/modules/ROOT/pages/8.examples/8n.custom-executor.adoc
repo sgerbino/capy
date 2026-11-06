@@ -70,7 +70,7 @@ include::example$custom-executor/custom_executor.cpp[tag=drive,indent=0]
 
 cpp:run_async[] enqueues the initial coroutine. `loop.run()` drains the queue, resuming coroutines one by one until all work completes.
 
-`run()` uses `capy::safe_resume(h)` instead of `h.resume()`. This saves and restores the thread-local xref:glossary.adoc#frame-allocator[frame allocator] around each resumption, preventing coroutines from spoiling each other's allocator. All custom executor event loops must use cpp:safe_resume[] -- see xref:4.coroutines/4h.allocators.adoc#_tls_preservation[TLS Preservation] for details.
+`run()` resumes each coroutine through its `chain_holder`. `h.resume()` saves and restores the thread-local xref:glossary.adoc#frame-allocator[frame allocator] around each resumption, preventing coroutines from spoiling each other's allocator. An event loop that holds a raw coroutine handle must use cpp:safe_resume[] instead -- see xref:4.coroutines/4h.allocators.adoc#_tls_preservation[TLS Preservation] for details.
 
 == Output
 

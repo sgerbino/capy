@@ -66,7 +66,7 @@ struct guard_test_executor
     std::coroutine_handle<>
     dispatch(chain_holder&& h) const
     {
-        return h.release()->h;
+        return h.take_handle();
     }
 
     void

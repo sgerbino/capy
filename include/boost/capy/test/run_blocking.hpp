@@ -125,7 +125,7 @@ private:
     Users do not interact with it directly.
 
     Coroutines still queued when the context is destroyed are
-    passed to @ref abandon rather than resumed.
+    given up rather than resumed.
 
     @par Thread Safety
     The event loop runs on the thread that calls `run()`.

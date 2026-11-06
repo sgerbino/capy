@@ -16,7 +16,7 @@
 #include <boost/capy/detail/run.hpp>
 #include <boost/capy/concept/executor.hpp>
 #include <boost/capy/concept/context_runnable.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <coroutine>
 #include <boost/capy/ex/frame_alloc_mixin.hpp>
@@ -26,6 +26,7 @@
 #include <exception>
 #include <memory_resource>
 #include <stop_token>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -90,8 +91,7 @@ struct boundary_trampoline
         {
             destroy_inner_(awaitable_);
             owner_ = nullptr;
-            auto parent = parent_;
-            capy::abandon(parent);
+            std::ignore = chain_holder(parent_);
         }
 
         ~promise_type()
@@ -133,7 +133,7 @@ struct boundary_trampoline
                     {
                         p_->owner_ = nullptr;
                         auto ex = p_->caller_ex_;
-                        ex.post(chain_holder(p_->parent_));
+                        resume_via(ex, p_->parent_);
                     }
                     return detail::symmetric_transfer(
                         std::noop_coroutine());

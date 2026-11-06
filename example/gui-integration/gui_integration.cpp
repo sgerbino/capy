@@ -149,7 +149,7 @@ public:
                     return;  // quit requested, nothing left to run
                 h = queue_.pop();
             }
-            capy::safe_resume(h.release()->h);
+            h.resume();
         }
     }
     // end::run[]
@@ -196,7 +196,7 @@ public:
     std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
     {
         if(app_->runs_inline())
-            return h.release()->h;  // resume inline by symmetric transfer
+            return h.take_handle();  // resume inline by symmetric transfer
         app_->post_to_gui_thread(std::move(h));
         return std::noop_coroutine();
     }
@@ -348,7 +348,7 @@ struct show_dialog
             // the last read of *this: the executor may resume the
             // coroutine -- and then destroy this awaitable -- before
             // this call returns.
-            env_->executor.post(capy::chain_holder(cont_));
+            capy::resume_via(env_->executor, cont_);
         });
         return std::noop_coroutine();
     }

@@ -71,7 +71,7 @@ public:
                 auto c = queue_.front();
                 queue_.pop();
                 any = true;
-                capy::abandon(c);
+                capy::chain_holder doomed(c);
             }
             return any;
         };

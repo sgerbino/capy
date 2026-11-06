@@ -11,7 +11,7 @@
 #include <boost/capy/ex/run.hpp>
 
 #include <boost/capy/concept/context_awaitable.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
@@ -680,7 +680,7 @@ struct run_test
         };
         run_async(caller)(owner(destroy_count_t(owner_down)));
         BOOST_TEST(slot);
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(owner_down, 1);
         BOOST_TEST(mr.allocs.load() > 0);
@@ -708,7 +708,7 @@ struct run_test
         BOOST_TEST(slot);
         auto* const before = get_current_frame_allocator();
         set_current_frame_allocator(&mine);
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST(get_current_frame_allocator() == &mine);
         set_current_frame_allocator(before);
     }
@@ -736,7 +736,7 @@ struct run_test
         run_async(caller)(owner(destroy_count_t(owner_down)));
         pump(q);
         BOOST_TEST(slot);
-        capy::abandon(slot);
+        give_up(slot);
         pump(q);
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(owner_down, 1);
@@ -765,7 +765,7 @@ struct run_test
             };
             run_async(caller)(parent(destroy_count_t(parent_down)));
             BOOST_TEST(slot);
-            capy::abandon(slot);
+            give_up(slot);
         }
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
@@ -797,7 +797,7 @@ struct run_test
             run_async(caller)(parent(destroy_count_t(parent_down)));
             pump(q);
             BOOST_TEST(slot);
-            capy::abandon(slot);
+            give_up(slot);
             pump(q);
         }
         BOOST_TEST_EQ(child_down, 1);
@@ -828,7 +828,7 @@ struct run_test
         BOOST_TEST(slot);
         BOOST_TEST_EQ(work, 2); // run_async's guard and run(ex)'s hold
 
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(parent_down, 0); // not inline: queued on caller
         BOOST_TEST_EQ(q.size(), 1u);
@@ -890,7 +890,7 @@ struct run_test
         pump(q);
         BOOST_TEST(slot);
         closed = true;
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
         BOOST_TEST(st.allocs > 0);
@@ -925,7 +925,7 @@ struct run_test
         BOOST_TEST(slot);
 
         closed = true;
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST(iq.empty());
         BOOST_TEST_EQ(parent_down, 0);
@@ -956,10 +956,10 @@ struct run_test
         };
         run_async(caller)(parent(destroy_count_t(parent_down)));
         pump(q);
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(q.size(), 1u);
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         BOOST_TEST_EQ(parent_down, 1);
         BOOST_TEST_EQ(work, 0);
@@ -1017,7 +1017,7 @@ struct run_test
         pump(q);
         slot.resume();
         BOOST_TEST_EQ(q.size(), 1u);
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         pump(q);
         BOOST_TEST_EQ(parent_down, 1);

@@ -46,7 +46,7 @@ class ready_node
     coroutines with its own operations. It tags each link, so use it
     only when the mix is needed.
 
-    The destructor abandons every queued coroutine. It leaves queued
+    The destructor gives up every queued coroutine. It leaves queued
     `Op` objects alone, as the queue does not own them.
 
     @par Thread Safety
@@ -60,7 +60,7 @@ class ready_node
         std::lock_guard lock(mutex_);
         doomed.splice(queue_);
     }
-    // The destructor abandons outside the lock
+    // The destructor gives them up outside the lock
     @endcode
 
     @tparam Op The operation type, derived from @ref ready_node, or
@@ -78,11 +78,10 @@ class ready_queue<void>
     continuation* tail_ = nullptr;
 
 public:
-    /// Destroy the queue, abandoning each queued coroutine.
+    /// Destroy the queue, giving up each queued coroutine.
     ~ready_queue()
     {
-        while(head_)
-            pop();
+        clear();
     }
 
     /// Construct an empty queue.
@@ -140,6 +139,16 @@ public:
         if(!head_)
             tail_ = nullptr;
         return chain_holder(*c);
+    }
+
+    /** Remove every entry, giving up each queued coroutine.
+
+        Call this without holding a lock an unwind may need.
+    */
+    void clear() noexcept
+    {
+        while(head_)
+            pop();
     }
 
     /** Move every entry of another queue to the back of this one.
@@ -235,8 +244,8 @@ class ready_queue
 public:
     /** One entry removed from a @ref ready_queue.
 
-        Owns a coroutine entry until @ref take is called, and abandons
-        it otherwise. Refers to an `Op` entry without owning it.
+        Owns a coroutine entry until @ref take is called, and gives
+        it up otherwise. Refers to an `Op` entry without owning it.
     */
     class entry
     {
@@ -250,7 +259,7 @@ public:
         }
 
     public:
-        /// Destroy the entry, abandoning a coroutine not yet taken.
+        /// Destroy the entry, giving up a coroutine not yet taken.
         ~entry()
         {
             if(is_continuation())
@@ -304,11 +313,10 @@ public:
         }
     };
 
-    /// Destroy the queue, abandoning each queued coroutine.
+    /// Destroy the queue, giving up each queued coroutine.
     ~ready_queue()
     {
-        while(head_)
-            pop();
+        clear();
     }
 
     /// Construct an empty queue.
@@ -369,6 +377,16 @@ public:
         if(!head_)
             tail_ = nullptr;
         return entry(e);
+    }
+
+    /** Remove every entry, giving up each queued coroutine.
+
+        Call this without holding a lock an unwind may need.
+    */
+    void clear() noexcept
+    {
+        while(head_)
+            pop();
     }
 
     /** Move every entry of another queue to the back of this one.

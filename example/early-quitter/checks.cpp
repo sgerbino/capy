@@ -94,7 +94,7 @@ struct yield_awaitable
     {
         c_.h = h;
         c_.owner = env->owner;
-        env->executor.post(capy::chain_holder(c_));
+        capy::resume_via(env->executor, c_);
     }
     void await_resume() const noexcept {}
 };

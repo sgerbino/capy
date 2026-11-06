@@ -12,55 +12,24 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/frame_allocator.hpp>
 
+#include <coroutine>
 #include <type_traits>
 #include <utility>
 
 namespace boost {
 namespace capy {
 
-/** Give up a suspended coroutine for good.
+namespace detail {
 
-    Called by the holder of a suspended coroutine that will never resume
-    it, such as an execution context, strand or primitive being torn
-    down. The coroutine's segment is unwound from its owner: on the
-    owner's executor, from the top frame down to this coroutine, without
-    any frame delivering a result. Ordinary cancellation does not use
-    this; it resumes the coroutine with an error instead.
-
-    A continuation with no owner, such as an owner's own continuation,
-    is destroyed directly.
-
-    A @ref chain_holder calls this from its destructor. Call it directly
-    only for a coroutine no holder can represent, such as one parked in
-    a list inside its own frame.
-
-    @par Preconditions
-    `c` refers to a suspended coroutine that the caller holds and that
-    nothing else will resume or abandon. If `c` has no owner, nothing
-    awaits the coroutine: destroying its frame alone would leave any
-    awaiting frame holding a destroyed one.
-
-    @par Postconditions
-    The caller must not touch the coroutine, or anything in its frame,
-    again. The frames may already be destroyed when this returns, if the
-    owner's executor destroys posted work at once.
-
-    @note The unwind runs on the owner's executor, which may belong to
-    another execution context than the caller's, and may run after the
-    caller's context is destroyed. A chain that holds objects of the
-    caller's context must therefore have finished before that context
-    is torn down.
-
-    @note Each frame is destroyed from the destructor of the frame
-    awaiting it, so the unwind uses stack in proportion to how deeply
-    the chain's coroutines are nested.
-
-    @param c The continuation of the coroutine given up.
-*/
+// Unwinds the coroutine's segment from its owner, or destroys a coroutine
+// with no owner. Reached only through a chain_holder's destructor.
 BOOST_CAPY_DECL
 void
-abandon(continuation& c) noexcept;
+abandon_chain(continuation& c) noexcept;
+
+} // namespace detail
 
 /** Owns the right to resume or give up one suspended coroutine.
 
@@ -68,11 +37,20 @@ abandon(continuation& c) noexcept;
     eventually resume it. An executor that drops work without resuming
     it would otherwise leak the whole chain with no report. This type
     makes the correct outcome the default: destroying a `chain_holder`
-    that still owns a coroutine gives the coroutine up with
-    @ref abandon.
+    that still owns a coroutine gives the coroutine up for good.
+
+    Giving up unwinds the coroutine's segment from its owner: on the
+    owner's executor, from the top frame down to this coroutine, without
+    any frame delivering a result. Ordinary cancellation does not use
+    this; it resumes the coroutine with an error instead. A continuation
+    with no owner, such as an owner's own continuation, is destroyed
+    directly, which requires that nothing awaits the coroutine.
 
     The referenced @ref continuation stays where it is, usually in the
     coroutine's own frame or awaitable, so posting allocates nothing.
+    Once a holder gives its coroutine up, nothing may touch the
+    coroutine or its frame again: the frames may already be destroyed
+    when the destructor returns.
 
     @par Thread Safety
     Distinct objects: Safe.
@@ -87,6 +65,12 @@ abandon(continuation& c) noexcept;
             return;  // `h` stays with the caller and abandons
         ctx_->queue.push(std::move(h));
     }
+
+    void run_one()
+    {
+        if(chain_holder h = ctx_->queue.pop())
+            h.resume();
+    }
     @endcode
 
     @note A holder stored inside the frame it owns cannot start the
@@ -97,7 +81,17 @@ abandon(continuation& c) noexcept;
     may need: abandoning can post, and can run frame destructors at
     once. Declare the holder before the lock so it dies after it.
 
-    @see abandon, ready_queue
+    @note The unwind runs on the owner's executor, which may belong to
+    another execution context than the holder's, and may run after that
+    context is destroyed. A chain that holds objects of the holder's
+    context must therefore have finished before that context is torn
+    down.
+
+    @note Each frame is destroyed from the destructor of the frame
+    awaiting it, so the unwind uses stack in proportion to how deeply
+    the chain's coroutines are nested.
+
+    @see ready_queue
 */
 class chain_holder
 {
@@ -111,7 +105,7 @@ public:
     ~chain_holder()
     {
         if(c_)
-            capy::abandon(*c_);
+            detail::abandon_chain(*c_);
     }
 
     /// Construct a holder that owns nothing.
@@ -158,6 +152,29 @@ public:
         return *this;
     }
 
+    /** Create a holder from a field that stores a suspended coroutine.
+
+        Clears the field, so a second claim on it finds nothing to own.
+        Prefer this over the constructor wherever the coroutine is
+        stored in a pointer, as in an operation's own field.
+
+        @par Preconditions
+        As for the constructor, if `c` is not null.
+
+        @par Postconditions
+        `c` is null.
+
+        @param c The field. Null makes a holder that owns nothing.
+
+        @return A holder of what `c` referred to.
+    */
+    static chain_holder take(continuation*& c) noexcept
+    {
+        chain_holder h;
+        h.c_ = std::exchange(c, nullptr);
+        return h;
+    }
+
     /// Check whether this object owns a coroutine.
     explicit operator bool() const noexcept
     {
@@ -166,16 +183,51 @@ public:
 
     /** Give up ownership without abandoning.
 
-        Use this to resume the coroutine, or to pass it where no C++
-        object can hold it, such as to a kernel queue or a C callback
-        API. Rebuild a holder with the returned continuation when it
-        comes back.
+        Use this to pass the coroutine where no C++ object can hold it,
+        such as to a kernel queue or a C callback API. Rebuild a holder
+        with the returned continuation when it comes back. To run the
+        coroutine, use @ref resume or @ref take_handle.
 
         @return The continuation, or null if this object owned nothing.
     */
     continuation* release() noexcept
     {
         return std::exchange(c_, nullptr);
+    }
+
+    /** Resume the coroutine, ending this object's ownership.
+
+        This is what an executor does with work it dequeues. The
+        calling thread's frame allocator is restored afterward, since
+        the coroutine may change it, as `safe_resume` does.
+
+        @par Preconditions
+        This object owns a coroutine.
+
+        @par Postconditions
+        This object owns nothing.
+    */
+    void resume() noexcept
+    {
+        safe_resume(release()->h);
+    }
+
+    /** Return the coroutine for symmetric transfer, ending ownership.
+
+        This is what `dispatch` returns to run the coroutine inline.
+        The caller must resume the handle.
+
+        @par Preconditions
+        This object owns a coroutine.
+
+        @par Postconditions
+        This object owns nothing.
+
+        @return The handle of the coroutine.
+    */
+    std::coroutine_handle<> take_handle() noexcept
+    {
+        return release()->h;
     }
 
     /** Pass ownership across a call that takes a raw continuation.
@@ -219,6 +271,32 @@ public:
         }
     }
 };
+
+/** Post a suspended coroutine to an executor to be resumed.
+
+    Awaitables finish this way: the caller holds the coroutine named by
+    `c`, and hands it to the executor it must run on. Prefer this to
+    building a @ref chain_holder at the call.
+
+    @par Preconditions
+    As for the @ref chain_holder constructor.
+
+    @par Exception Safety
+    If the post throws, the coroutine has been given up by the time the
+    exception reaches the caller, who must not touch it again. Code that
+    recovers from a failed post needs a named holder instead, which
+    still owns the coroutine in the handler.
+
+    @param ex The executor to post to.
+
+    @param c The continuation of the coroutine.
+*/
+template<class Ex>
+void
+resume_via(Ex const& ex, continuation& c)
+{
+    ex.post(chain_holder(c));
+}
 
 namespace detail {
 
