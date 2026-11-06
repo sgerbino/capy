@@ -41,9 +41,9 @@ void post_three(capy::thread_pool& pool,
 {
     capy::strand sd(pool.get_executor());  // CTAD deduces the executor type
 
-    sd.post(c1);
-    sd.post(c2);
-    sd.post(c3);
+    sd.post(capy::chain_holder(c1));
+    sd.post(capy::chain_holder(c2));
+    sd.post(capy::chain_holder(c3));
 }
 // end::example[]
 } // namespace ex_1

@@ -309,7 +309,7 @@ struct when_any_results_runner
                         capy::abandon(parent);
                         return detail::symmetric_transfer(std::noop_coroutine());
                     }
-                    return detail::symmetric_transfer(caller_env->executor.dispatch(cont));
+                    return detail::symmetric_transfer(caller_env->executor.dispatch(chain_holder(cont)));
                 }
                 void await_resume() const noexcept {} // LCOV_EXCL_LINE final_suspend awaiter, never resumed
             };
@@ -493,7 +493,7 @@ private:
             &h.promise().segment_};
 
         state_->runner_handles_[I].h = std::coroutine_handle<>{h};
-        caller_ex.post(state_->runner_handles_[I]);
+        caller_ex.post(chain_holder(state_->runner_handles_[I]));
     }
 };
 
@@ -675,7 +675,7 @@ public:
         auto* handles = state_->runner_handles_.get();
         std::size_t count = state_->core_.remaining_count_.load(std::memory_order_relaxed);
         for(std::size_t i = 0; i < count; ++i)
-            caller_env->executor.post(handles[i]);
+            caller_env->executor.post(chain_holder(handles[i]));
 
         return std::noop_coroutine();
     }

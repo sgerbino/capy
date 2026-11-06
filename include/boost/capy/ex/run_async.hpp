@@ -562,7 +562,17 @@ public:
         p.task_cont_.owner = &p.owner_;
         // If dispatch throws, the destructor destroys the trampoline
         // and the unstarted task with it.
-        auto next = p.wg_.executor().dispatch(p.task_cont_);
+        chain_holder held(p.task_cont_);
+        std::coroutine_handle<> next;
+        try
+        {
+            next = p.wg_.executor().dispatch(std::move(held));
+        }
+        catch(...)
+        {
+            held.release();
+            throw;
+        }
         // From here the trampoline destroys itself when the task ends.
         tr_.h_ = nullptr;
         next.resume();

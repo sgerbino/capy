@@ -109,17 +109,17 @@ struct test_executor
     void on_work_finished() const noexcept {}
 
     std::coroutine_handle<>
-    dispatch(continuation& c) const
+    dispatch(chain_holder&& h) const
     {
         if(dispatch_count_)
             ++(*dispatch_count_);
-        return c.h;
+        return h.release()->h;
     }
 
     void
-    post(continuation& c) const
+    post(chain_holder&& h) const
     {
-        c.h.resume();
+        h.release()->h.resume();
     }
 };
 
@@ -261,7 +261,7 @@ struct self_destroy_awaitable
 
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, await_context const* env)
     {
-        continuation c{h, nullptr, env->owner};
+        continuation c{h, env->owner};
         capy::abandon(c);
         return std::noop_coroutine();
     }
@@ -280,7 +280,7 @@ struct resume_via_post
 
     void operator()() const noexcept
     {
-        ex.post(cont);
+        ex.post(chain_holder(cont));
     }
 };
 
@@ -291,7 +291,7 @@ post_resume(
     await_context const& env,
     std::coroutine_handle<> h) noexcept
 {
-    return resume_via_post{env.executor, continuation{h, nullptr, env.owner}};
+    return resume_via_post{env.executor, continuation{h, env.owner}};
 }
 
 // test awaitable that must be stopped in order to resume.
@@ -520,15 +520,15 @@ struct queuing_executor
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(continuation& c) const
+    std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        queue_->push(c);
+        queue_->push(*h.release());
         return std::noop_coroutine();
     }
 
-    void post(continuation& c) const
+    void post(chain_holder&& h) const
     {
-        queue_->push(c);
+        queue_->push(*h.release());
     }
 };
 
@@ -557,17 +557,16 @@ struct closing_executor
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(continuation& c) const
+    std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        return c.h;
+        return h.release()->h;
     }
 
-    void post(continuation& c) const
+    void post(chain_holder&& h) const
     {
         if(*closed)
-            capy::abandon(c);
-        else
-            q->push(c);
+            return;
+        q->push(*h.release());
     }
 };
 
@@ -596,7 +595,7 @@ struct yield_awaitable
     {
         // Post ourselves back to the queue
         cont_.h = h;
-        env->executor.post(cont_);
+        env->executor.post(chain_holder(cont_));
         return std::noop_coroutine();
     }
 

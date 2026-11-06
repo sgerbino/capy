@@ -128,7 +128,7 @@ public:
                     true, std::memory_order_acq_rel))
                 {
                     self_->canceled_ = true;
-                    self_->ex_.post(self_->cont_);
+                    self_->ex_.post(chain_holder(self_->cont_));
                 }
             }
         };
@@ -363,7 +363,7 @@ public:
             if(!w->claimed_.exchange(true, std::memory_order_acq_rel))
             {
                 w->canceled_ = true;
-                w->ex_.post(w->cont_);
+                w->ex_.post(chain_holder(w->cont_));
             }
         }
     }
@@ -398,7 +398,7 @@ public:
         while(auto* w = claimed.pop_front())
         {
             w->list_ = nullptr;
-            w->ex_.post(w->cont_);
+            w->ex_.post(chain_holder(w->cont_));
         }
     }
 

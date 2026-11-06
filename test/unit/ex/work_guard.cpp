@@ -64,14 +64,15 @@ struct guard_test_executor
     }
 
     std::coroutine_handle<>
-    dispatch(continuation& c) const
+    dispatch(chain_holder&& h) const
     {
-        return c.h;
+        return h.release()->h;
     }
 
     void
-    post(continuation&) const
+    post(chain_holder&& h) const
     {
+        h.release();
     }
 };
 

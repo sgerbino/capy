@@ -49,13 +49,16 @@ struct thread_pool_faults_test
 
         {
             fault_scope fault(sys::pthread_create, EAGAIN, 2);
+            chain_holder held_c1(c1);
             BOOST_TEST_THROWS(
-                pool.get_executor().post(c1), std::system_error);
+                pool.get_executor().post(std::move(held_c1)), std::system_error);
+            BOOST_TEST(bool(held_c1));
+            held_c1.release();
             BOOST_TEST(fault.fired());
         }
         {
             fault_scope counter(sys::pthread_create, EAGAIN, count_only);
-            pool.get_executor().post(c2);
+            pool.get_executor().post(chain_holder(c2));
             BOOST_TEST_EQ(counter.count(), 1u);
         }
 
@@ -74,13 +77,16 @@ struct thread_pool_faults_test
 
         {
             fault_scope fault(sys::pthread_create, EAGAIN);
+            chain_holder held_c1(c1);
             BOOST_TEST_THROWS(
-                pool.get_executor().post(c1), std::system_error);
+                pool.get_executor().post(std::move(held_c1)), std::system_error);
+            BOOST_TEST(bool(held_c1));
+            held_c1.release();
             BOOST_TEST(fault.fired());
         }
         {
             fault_scope counter(sys::pthread_create, EAGAIN, count_only);
-            pool.get_executor().post(c2);
+            pool.get_executor().post(chain_holder(c2));
             BOOST_TEST_EQ(counter.count(), 2u);
         }
 

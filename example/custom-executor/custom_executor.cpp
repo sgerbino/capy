@@ -31,7 +31,7 @@ namespace capy = boost::capy;
 class run_loop : public capy::execution_context
 {
 // end::inherit[]
-    std::queue<capy::continuation> queue_;
+    capy::ready_queue<> queue_;
     std::thread::id owner_;
 
 public:
@@ -48,15 +48,12 @@ public:
     {
         // Once torn down, the loop runs nothing, not even inline.
         owner_ = {};
-        // Nothing will run these now: give them up, so their chains
-        // are unwound. An unwind posted here is given up in turn.
+        // Nothing will run these now. Dropping a holder gives its
+        // coroutine up, and an unwind posted here is given up in turn.
         auto drain = [this]
         {
-            while (!queue_.empty())
+            while (auto h = queue_.pop())
             {
-                auto c = queue_.front();
-                queue_.pop();
-                capy::abandon(c);
             }
         };
         shutdown();
@@ -74,18 +71,13 @@ public:
     void run()
     {
         owner_ = std::this_thread::get_id();
-        while (!queue_.empty())
-        {
-            auto c = queue_.front();
-            queue_.pop();
-            capy::safe_resume(c.h);
-        }
+        while (auto h = queue_.pop())
+            capy::safe_resume(h.release()->h);
     }
 
-    // A copy keeps the owner, which abandon needs.
-    void enqueue(capy::continuation const& c)
+    void enqueue(capy::chain_holder&& h)
     {
-        queue_.push(c);
+        queue_.push(std::move(h));
     }
 
     bool is_running_on_this_thread() const noexcept
@@ -121,18 +113,18 @@ public:
 
     // tag::dispatch[]
     std::coroutine_handle<> dispatch(
-        capy::continuation& c) const
+        capy::chain_holder&& h) const
     {
         if (loop_->is_running_on_this_thread())
-            return c.h;        // resume inline
-        loop_->enqueue(c);
+            return h.release()->h;     // resume inline
+        loop_->enqueue(std::move(h));
         return std::noop_coroutine();  // defer
     }
     // end::dispatch[]
 
-    void post(capy::continuation& c) const
+    void post(capy::chain_holder&& h) const
     {
-        loop_->enqueue(c);
+        loop_->enqueue(std::move(h));
     }
 
     bool operator==(executor_type const& other) const noexcept

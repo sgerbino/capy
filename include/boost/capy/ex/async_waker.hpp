@@ -175,7 +175,7 @@ public:
                     self_->canceled_ = true;
                     self_->claimed_.store(
                         true, std::memory_order_release);
-                    self_->ex_.post(self_->cont_);
+                    self_->ex_.post(chain_holder(self_->cont_));
                 }
             }
         };
@@ -446,7 +446,7 @@ public:
             }
             w->canceled_ = true;
             w->claimed_.store(true, std::memory_order_release);
-            w->ex_.post(w->cont_);
+            w->ex_.post(chain_holder(w->cont_));
         }
     }
 
@@ -546,7 +546,7 @@ public:
                 w->stop_cb_().~cb_t();
                 w->active_ = false;
                 w->claimed_.store(true, std::memory_order_release);
-                w->ex_.post(w->cont_);
+                w->ex_.post(chain_holder(w->cont_));
                 return;
             }
         } // LCOV_EXCL_LINE armed CAS lost to a stop callback or failed spuriously

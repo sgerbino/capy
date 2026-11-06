@@ -144,7 +144,7 @@ struct frame_cb_test
             await_context const* env) noexcept
         {
             cont_.h = h;
-            env->executor.post(cont_);
+            env->executor.post(chain_holder(cont_));
             return std::noop_coroutine();
         }
 

@@ -213,7 +213,7 @@ struct parking_lot
         std::coroutine_handle<>
         await_suspend(std::coroutine_handle<> h, await_context const* env)
         {
-            lot->hs.push_back(continuation{h, nullptr, env->owner});
+            lot->hs.push_back(continuation{h, env->owner});
             return std::noop_coroutine();
         }
 
@@ -280,13 +280,14 @@ struct counting_executor
     }
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
-    std::coroutine_handle<> dispatch(continuation& c) const
+    std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        post(c);
+        post(std::move(h));
         return std::noop_coroutine();
     }
-    void post(continuation&) const
+    void post(chain_holder&& h) const
     {
+        h.release();
         ++*posts;
     }
 };

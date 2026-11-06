@@ -12,6 +12,7 @@
 
 #include <boost/capy/concept/executor.hpp>
 #include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/ready_queue.hpp>
 #include <boost/capy/ex/execution_context.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
@@ -33,10 +34,8 @@ namespace test {
 struct priority_executor_state
 {
     std::mutex mutex;
-    continuation* high_head = nullptr;
-    continuation* high_tail = nullptr;
-    continuation* low_head = nullptr;
-    continuation* low_tail = nullptr;
+    ready_queue<> high;
+    ready_queue<> low;
     bool locked = false;
     std::atomic<std::thread::id> dispatch_thread{};
 };
@@ -64,15 +63,10 @@ struct priority_invoker
 };
 
 inline void
-drain_list(continuation* head) noexcept
+drain_list(ready_queue<>& q) noexcept
 {
-    while(head)
-    {
-        continuation* c = head;
-        head = static_cast<continuation*>(c->reserved);
-        c->reserved = nullptr;
-        ::boost::capy::safe_resume(c->h);
-    }
+    while(auto h = q.pop())
+        ::boost::capy::safe_resume(h.release()->h);
 }
 
 inline priority_invoker
@@ -84,24 +78,20 @@ make_priority_invoker(priority_executor_state* s)
             std::this_thread::get_id(),
             std::memory_order_release);
 
-        continuation* high_head;
-        continuation* low_head;
+        ready_queue<> high;
+        ready_queue<> low;
         {
             std::lock_guard<std::mutex> lk(s->mutex);
-            high_head = s->high_head;
-            low_head = s->low_head;
-            s->high_head = nullptr;
-            s->high_tail = nullptr;
-            s->low_head = nullptr;
-            s->low_tail = nullptr;
+            high.splice(s->high);
+            low.splice(s->low);
         }
 
-        drain_list(high_head);
-        drain_list(low_head);
+        drain_list(high);
+        drain_list(low);
 
         {
             std::lock_guard<std::mutex> lk(s->mutex);
-            if(!s->high_head && !s->low_head)
+            if(s->high.empty() && s->low.empty())
             {
                 s->locked = false;
                 s->dispatch_thread.store(
@@ -127,30 +117,18 @@ class priority_executor
     enum class priority { high, low };
 
     void
-    enqueue_under_lock(continuation& c, priority p) const noexcept
+    enqueue_under_lock(chain_holder&& h, priority p) const noexcept
     {
-        c.reserved = nullptr;
-        if(p == priority::high)
-        {
-            if(state_->high_tail) state_->high_tail->reserved = &c;
-            else state_->high_head = &c;
-            state_->high_tail = &c;
-        }
-        else
-        {
-            if(state_->low_tail) state_->low_tail->reserved = &c;
-            else state_->low_head = &c;
-            state_->low_tail = &c;
-        }
+        (p == priority::high ? state_->high : state_->low).push(std::move(h));
     }
 
     void
-    post_with_priority(continuation& c, priority p) const
+    post_with_priority(chain_holder&& h, priority p) const
     {
         bool first;
         {
             std::lock_guard<std::mutex> lk(state_->mutex);
-            enqueue_under_lock(c, p);
+            enqueue_under_lock(std::move(h), p);
             first = !state_->locked;
             if(first) state_->locked = true;
         }
@@ -164,8 +142,7 @@ class priority_executor
         auto inv = detail::make_priority_invoker(state_);
         auto& self = inv.h_.promise().self;
         self.h = inv.h_;
-        self.reserved = nullptr;
-        inner_ex_.post(self);
+        inner_ex_.post(chain_holder(self));
     }
 
 public:
@@ -207,30 +184,30 @@ public:
     }
 
     std::coroutine_handle<>
-    dispatch(continuation& c) const
+    dispatch(chain_holder&& h) const
     {
         if(running_in_this_thread())
-            return c.h;
-        post_with_priority(c, priority::low);
+            return h.release()->h;
+        post_with_priority(std::move(h), priority::low);
         return std::noop_coroutine();
     }
 
     void
-    post(continuation& c) const
+    post(chain_holder&& h) const
     {
-        post_with_priority(c, priority::low);
+        post_with_priority(std::move(h), priority::low);
     }
 
     void
-    post_high(continuation& c) const
+    post_high(chain_holder&& h) const
     {
-        post_with_priority(c, priority::high);
+        post_with_priority(std::move(h), priority::high);
     }
 
     void
-    post_low(continuation& c) const
+    post_low(chain_holder&& h) const
     {
-        post_with_priority(c, priority::low);
+        post_with_priority(std::move(h), priority::low);
     }
 };
 

@@ -101,8 +101,8 @@ public:
         if(stop_task_)
             return stop_task_->await_suspend(h, env);
         env_ = env;
-        cont_ = continuation{h, nullptr, env->owner};
-        env_->executor.post(cont_);
+        cont_ = continuation{h, env->owner};
+        env_->executor.post(chain_holder(cont_));
         return std::noop_coroutine();
     }
 
@@ -163,8 +163,8 @@ public:
         await_context const* env)
     {
         env_ = env;
-        cont_ = continuation{h, nullptr, env->owner};
-        env_->executor.post(cont_);
+        cont_ = continuation{h, env->owner};
+        env_->executor.post(chain_holder(cont_));
         return std::noop_coroutine();
     }
 

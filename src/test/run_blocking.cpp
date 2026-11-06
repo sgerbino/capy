@@ -11,9 +11,10 @@
 
 #include <boost/capy/ex/abandon.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
+#include <boost/capy/ex/ready_queue.hpp>
+
 #include <condition_variable>
 #include <mutex>
-#include <queue>
 #include <system_error>
 #include <utility>
 
@@ -33,7 +34,7 @@ struct blocking_context::impl
 {
     std::mutex mtx;
     std::condition_variable cv;
-    std::queue<continuation> queue;
+    ready_queue<> queue;
     std::exception_ptr ep;
     bool done = false;
     bool abandoned = false;
@@ -46,22 +47,19 @@ blocking_context::blocking_context()
 
 blocking_context::~blocking_context()
 {
-    // Nothing will run these now; abandon them as their holder. Each is
-    // taken under the lock and abandoned outside it, since abandoning
-    // one may post another.
+    // Nothing will run these now. Each is taken under the lock and
+    // dropped outside it, since abandoning one may post another.
     auto drain = [this]
     {
         for(;;)
         {
-            continuation c;
+            chain_holder h;
             {
                 std::lock_guard<std::mutex> lock(impl_->mtx);
-                if(impl_->queue.empty())
-                    return;
-                c = impl_->queue.front();
-                impl_->queue.pop();
+                h = impl_->queue.pop();
             }
-            capy::abandon(c);
+            if(!h)
+                return;
         }
     };
     shutdown();
@@ -128,7 +126,7 @@ blocking_context::run()
 
     for(;;)
     {
-        continuation c;
+        chain_holder h;
         {
             std::unique_lock<std::mutex> lock(impl_->mtx);
             impl_->cv.wait(lock, [&] {
@@ -136,10 +134,9 @@ blocking_context::run()
             });
             if(impl_->done && impl_->queue.empty())
                 break;
-            c = impl_->queue.front();
-            impl_->queue.pop();
+            h = impl_->queue.pop();
         }
-        safe_resume(c.h);
+        safe_resume(h.release()->h);
     }
     if(impl_->ep)
         std::rethrow_exception(impl_->ep);
@@ -149,10 +146,10 @@ blocking_context::run()
 
 void
 blocking_context::enqueue(
-    continuation const& c)
+    chain_holder&& h)
 {
     std::lock_guard<std::mutex> lock(impl_->mtx);
-    impl_->queue.push(c);
+    impl_->queue.push(std::move(h));
     impl_->cv.notify_one();
 }
 
@@ -183,19 +180,19 @@ blocking_executor::on_work_finished() const noexcept
 
 std::coroutine_handle<>
 blocking_executor::dispatch(
-    continuation& c) const
+    chain_holder&& h) const
 {
     if(running_ == ctx_)
-        return c.h;
-    ctx_->enqueue(c);
+        return h.release()->h;
+    ctx_->enqueue(std::move(h));
     return std::noop_coroutine();
 }
 
 void
 blocking_executor::post(
-    continuation& c) const
+    chain_holder&& h) const
 {
-    ctx_->enqueue(c);
+    ctx_->enqueue(std::move(h));
 }
 
 } // namespace test

@@ -12,6 +12,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/chain_holder.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 
 #include <atomic>
@@ -82,53 +83,9 @@ public:
     {
         if(abandoned_.exchange(true, std::memory_order_acq_rel))
             return;
-        ex_.post(self_);
+        ex_.post(chain_holder(self_));
     }
 };
-
-/** Give up a suspended coroutine for good.
-
-    Called by the holder of a suspended coroutine that will never resume
-    it, such as an execution context, strand or primitive being torn
-    down. The coroutine's segment is unwound from its owner: on the
-    owner's executor, from the top frame down to this coroutine, without
-    any frame delivering a result. Ordinary cancellation does not use
-    this; it resumes the coroutine with an error instead.
-
-    A continuation with no owner, such as an owner's own continuation,
-    is destroyed directly.
-
-    @par Preconditions
-    `c` refers to a suspended coroutine that the caller holds and that
-    nothing else will resume or abandon. If `c` has no owner, nothing
-    awaits the coroutine: destroying its frame alone would leave any
-    awaiting frame holding a destroyed one.
-
-    @par Postconditions
-    The caller must not touch the coroutine, or anything in its frame,
-    again. The frames may already be destroyed when this returns, if the
-    owner's executor destroys posted work at once.
-
-    @note The unwind runs on the owner's executor, which may belong to
-    another execution context than the caller's, and may run after the
-    caller's context is destroyed. A chain that holds objects of the
-    caller's context must therefore have finished before that context
-    is torn down.
-
-    @note Each frame is destroyed from the destructor of the frame
-    awaiting it, so the unwind uses stack in proportion to how deeply
-    the chain's coroutines are nested.
-
-    @param c The continuation of the coroutine given up.
-*/
-inline void
-abandon(continuation& c) noexcept
-{
-    if(c.owner)
-        c.owner->abandon();
-    else if(c.h)
-        c.h.destroy();
-}
 
 } // namespace capy
 } // namespace boost

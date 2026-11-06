@@ -132,17 +132,17 @@ public:
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(capy::continuation& c) const
+    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
     {
         step("executor: dispatch");
-        loop_->enqueue(c);
+        loop_->enqueue(*h.release());
         return std::noop_coroutine();
     }
 
-    void post(capy::continuation& c) const
+    void post(capy::chain_holder&& h) const
     {
         step("executor: post");
-        loop_->enqueue(c);
+        loop_->enqueue(*h.release());
     }
 
     bool operator==(executor_type const& other) const noexcept
@@ -179,7 +179,7 @@ struct read_awaitable
         backend.push([this] {
             step("I/O backend: the operation completes");
             bytes_ = 5;
-            ex_.post(cont_);  // never cont_.h.resume()
+            ex_.post(capy::chain_holder(cont_));  // never cont_.h.resume()
         });
         step("I/O awaitable: suspend");
         return std::noop_coroutine();

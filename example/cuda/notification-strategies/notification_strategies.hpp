@@ -110,7 +110,7 @@ class poll_service
             }
             // Outside the lock: a post may unwind the waiter's chain.
             for(auto& e : ready_)
-                e.ex.post(*e.cont);
+                e.ex.post(chain_holder(*e.cont));
             ready_.clear();
             std::this_thread::yield();
         }
@@ -331,7 +331,7 @@ struct callback_awaitable
     {
         auto* c = static_cast<resume_ctx*>(arg);
         *c->ec = std::error_code{};
-        c->ex.post(*c->cont);
+        c->ex.post(chain_holder(*c->cont));
     }
 
     bool await_ready() const noexcept
@@ -456,7 +456,7 @@ public:
             *ec = (err == cudaSuccess)
                 ? std::error_code{}
                 : make_cuda_error(err);
-            ex.post(*cont);
+            ex.post(chain_holder(*cont));
         });
         return std::noop_coroutine();
     }

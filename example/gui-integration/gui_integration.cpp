@@ -69,7 +69,7 @@ class gui_app : public capy::execution_context
     std::thread::id const gui_thread_ = std::this_thread::get_id();
     std::mutex m_;
     std::condition_variable cv_;
-    std::deque<capy::continuation> queue_;
+    capy::ready_queue<> queue_;
     bool quit_ = false;
     bool closed_ = false;
 
@@ -85,21 +85,19 @@ public:
     {
         // Once torn down, the app runs nothing, not even inline.
         closed_ = true;
-        // Nothing will run these now: give them up, so their chains
-        // are unwound. An unwind posted here is given up in turn.
+        // Nothing will run these now. Dropping a holder gives its
+        // coroutine up, and an unwind posted here is given up in turn.
         auto drain = [this]
         {
             for(;;)
             {
-                capy::continuation c;
+                capy::chain_holder h;
                 {
                     std::lock_guard<std::mutex> lock(m_);
-                    if(queue_.empty())
-                        return;
-                    c = queue_.front();
-                    queue_.pop_front();
+                    h = queue_.pop();
                 }
-                capy::abandon(c);
+                if(!h)
+                    return;
             }
         };
         shutdown();
@@ -115,12 +113,11 @@ public:
 
     // Run a coroutine on the GUI thread.  Callable from any thread and
     // never blocks the caller.
-    // A copy keeps the owner, which abandon needs.
-    void post_to_gui_thread(capy::continuation const& c)
+    void post_to_gui_thread(capy::chain_holder&& h)
     {
         {
             std::lock_guard<std::mutex> lock(m_);
-            queue_.push_back(c);
+            queue_.push(std::move(h));
         }
         cv_.notify_one();
     }
@@ -143,17 +140,16 @@ public:
         check(on_gui_thread(), "run() called off the GUI thread");
         for(;;)
         {
-            capy::continuation c;
+            capy::chain_holder h;
             {
                 std::unique_lock<std::mutex> lock(m_);
                 cv_.wait(lock,
                     [this]{ return !queue_.empty() || quit_; });
                 if(queue_.empty())
                     return;  // quit requested, nothing left to run
-                c = queue_.front();
-                queue_.pop_front();
+                h = queue_.pop();
             }
-            capy::safe_resume(c.h);
+            capy::safe_resume(h.release()->h);
         }
     }
     // end::run[]
@@ -197,17 +193,17 @@ public:
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(capy::continuation& c) const
+    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
     {
         if(app_->runs_inline())
-            return c.h;  // resume inline by symmetric transfer
-        app_->post_to_gui_thread(c);
+            return h.release()->h;  // resume inline by symmetric transfer
+        app_->post_to_gui_thread(std::move(h));
         return std::noop_coroutine();
     }
 
-    void post(capy::continuation& c) const
+    void post(capy::chain_holder&& h) const
     {
-        app_->post_to_gui_thread(c);
+        app_->post_to_gui_thread(std::move(h));
     }
 
     bool operator==(executor_type const& other) const noexcept
@@ -352,7 +348,7 @@ struct show_dialog
             // the last read of *this: the executor may resume the
             // coroutine -- and then destroy this awaitable -- before
             // this call returns.
-            env_->executor.post(cont_);
+            env_->executor.post(capy::chain_holder(cont_));
         });
         return std::noop_coroutine();
     }

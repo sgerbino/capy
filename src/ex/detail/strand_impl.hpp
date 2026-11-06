@@ -10,8 +10,8 @@
 #ifndef BOOST_CAPY_SRC_EX_DETAIL_STRAND_IMPL_HPP
 #define BOOST_CAPY_SRC_EX_DETAIL_STRAND_IMPL_HPP
 
-#include "src/ex/detail/strand_queue.hpp"
 #include <boost/capy/detail/intrusive.hpp>
+#include <boost/capy/ex/ready_queue.hpp>
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -32,7 +32,7 @@ struct strand_impl
     : intrusive_list<strand_impl>::node
 {
     std::mutex* mutex_ = nullptr;
-    strand_queue pending_;
+    ready_queue<> pending_;
     bool locked_ = false;
     std::atomic<std::thread::id> dispatch_thread_{};
 

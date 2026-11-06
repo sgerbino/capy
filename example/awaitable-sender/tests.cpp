@@ -195,7 +195,7 @@ struct ec_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(cont_);
+        env_->executor.post(capy::chain_holder(cont_));
         return std::noop_coroutine();
     }
 
@@ -219,7 +219,7 @@ struct compound_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(cont_);
+        env_->executor.post(capy::chain_holder(cont_));
         return std::noop_coroutine();
     }
 
@@ -259,7 +259,7 @@ struct void_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(cont_);
+        env_->executor.post(capy::chain_holder(cont_));
         return std::noop_coroutine();
     }
 
@@ -281,7 +281,7 @@ struct value_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(cont_);
+        env_->executor.post(capy::chain_holder(cont_));
         return std::noop_coroutine();
     }
 
@@ -303,7 +303,7 @@ struct throwing_op
     {
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(cont_);
+        env_->executor.post(capy::chain_holder(cont_));
         return std::noop_coroutine();
     }
 
@@ -648,7 +648,7 @@ struct alloc_probe_op
         *out_ = env->frame_allocator;
         env_ = env;
         cont_ = capy::continuation{h};
-        env_->executor.post(cont_);
+        env_->executor.post(capy::chain_holder(cont_));
         return std::noop_coroutine();
     }
 
@@ -972,13 +972,12 @@ struct abandoning_executor
     }
     void on_work_started() const noexcept { inner_.on_work_started(); }
     void on_work_finished() const noexcept { inner_.on_work_finished(); }
-    std::coroutine_handle<> dispatch(capy::continuation& c) const
+    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
     {
-        return c.h;
+        return h.release()->h;
     }
-    void post(capy::continuation& c) const
+    void post(capy::chain_holder&&) const
     {
-        capy::abandon(c);
     }
 };
 
