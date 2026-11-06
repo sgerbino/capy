@@ -11,7 +11,7 @@
 // Test that header file is self-contained.
 #include <boost/capy/task.hpp>
 
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/async_waker.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/run.hpp>
@@ -89,12 +89,12 @@ struct tracking_executor
         ++(*dispatch_count_);
         if (dispatch_log)
             dispatch_log->push_back(id);
-        return h.release()->h;
+        return h.take_handle();
     }
 
     void post(chain_holder&& h) const
     {
-        h.release()->h.resume();
+        h.resume();
     }
 };
 
@@ -1352,7 +1352,7 @@ struct task_test
         run_async(ex, counting_allocator<std::byte>(st))(
             parent(&slot, destroy_count_t(parent_down)));
         BOOST_TEST(slot);
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
         BOOST_TEST(st.allocs > 0);
@@ -1386,7 +1386,7 @@ struct task_test
         pump(q);
         BOOST_TEST(slot);
 
-        capy::abandon(slot);
+        give_up(slot);
         pump(q);
         BOOST_TEST_EQ(leaf_down, 1);
         BOOST_TEST_EQ(mid_down, 1);
@@ -1421,7 +1421,7 @@ struct task_test
         pump(q);
         BOOST_TEST(slot);
 
-        capy::abandon(slot);
+        give_up(slot);
         pump(q);
         BOOST_TEST_EQ(leaf_down, 1);
         BOOST_TEST_EQ(root_down, 1);
@@ -1485,7 +1485,7 @@ struct task_test
             pump(q);
             BOOST_TEST(slot);
 
-            capy::abandon(slot);
+            give_up(slot);
             pump(q);
         }
         std::vector<std::string> const expected{
@@ -1510,7 +1510,7 @@ struct task_test
             BOOST_TEST(slot);
             BOOST_TEST_EQ(down, 0);
 
-            capy::abandon(slot);
+            give_up(slot);
             pump(q);
         }
         BOOST_TEST_EQ(down, depth + 1);
@@ -1545,7 +1545,7 @@ struct task_test
         run_async(ex, counting_allocator<std::byte>(st))(
             parent(&slot, destroy_count_t(parent_down)));
         BOOST_TEST(slot);
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(sub_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
         BOOST_TEST(st.allocs > 0);

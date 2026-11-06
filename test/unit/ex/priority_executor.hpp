@@ -66,7 +66,7 @@ inline void
 drain_list(ready_queue<>& q) noexcept
 {
     while(auto h = q.pop())
-        ::boost::capy::safe_resume(h.release()->h);
+        h.resume();
 }
 
 inline priority_invoker
@@ -187,7 +187,7 @@ public:
     dispatch(chain_holder&& h) const
     {
         if(running_in_this_thread())
-            return h.release()->h;
+            return h.take_handle();
         post_with_priority(std::move(h), priority::low);
         return std::noop_coroutine();
     }

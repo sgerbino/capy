@@ -12,7 +12,7 @@
 
 #include <boost/capy/buffers/make_buffer.hpp>
 #include <boost/capy/error.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/run_async.hpp>
@@ -371,7 +371,7 @@ public:
         run_async(ex, counting_allocator<std::byte>(st))(
             parent(destroy_count_t(parent_down)));
         BOOST_TEST(slot);
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(parent_down, 1);
         BOOST_TEST(st.allocs > 1);
         BOOST_TEST(st.balanced());
@@ -427,7 +427,7 @@ public:
         BOOST_TEST_EQ(first, 1u);
         BOOST_TEST_EQ(parent_down, 0);
         BOOST_TEST(slot);
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(parent_down, 1);
     }
 

@@ -123,7 +123,7 @@ class cuda_stream
     on_complete(void* arg)
     {
         auto* ctx = static_cast<resume_ctx*>(arg);
-        ctx->ex.post(chain_holder(*ctx->cont));
+        resume_via(ctx->ex, *ctx->cont);
     }
 
     // The paper hardcodes HostToDevice and describes memcpy_d2h as "the
@@ -301,7 +301,7 @@ class cuda_device_stream
     on_complete(void* arg)
     {
         auto* ctx = static_cast<resume_ctx*>(arg);
-        ctx->ex.post(chain_holder(*ctx->cont));
+        resume_via(ctx->ex, *ctx->cont);
     }
 
 public:

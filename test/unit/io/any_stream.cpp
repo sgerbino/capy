@@ -13,7 +13,7 @@
 #include <boost/capy/buffers/buffer_copy.hpp>
 #include <boost/capy/buffers/make_buffer.hpp>
 #include <boost/capy/cond.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/task.hpp>
@@ -325,7 +325,7 @@ public:
         BOOST_TEST_EQ(st.ops_down, 1);
         BOOST_TEST_EQ(st.late, 0);
 
-        capy::abandon(st.slot);
+        give_up(st.slot);
         BOOST_TEST_EQ(st.ops_down, 1);
     }
 

@@ -12,7 +12,7 @@
 
 #include <boost/capy/concept/context_awaitable.hpp>
 #include <boost/capy/error.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/results.hpp>
@@ -1070,10 +1070,10 @@ struct async_mutex_test
         run_async(ex, std::allocator<std::byte>{})(owner());
         pump(q);
         BOOST_TEST(slot);
-        capy::abandon(slot);
+        give_up(slot);
         while(!q.empty())
         {
-            capy::abandon(q.front());
+            give_up(q.front());
             q.pop();
         }
         BOOST_TEST_EQ(down, 2);
@@ -1150,7 +1150,7 @@ struct async_mutex_test
         pump(q);
         m.reset();
         BOOST_TEST_EQ(q.size(), 1u);
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         pump(q);
         BOOST_TEST_EQ(down, 1);
@@ -1172,7 +1172,7 @@ struct async_mutex_test
         pump(q);                 // waiter queued on the mutex
         m.unlock();              // hands the lock over, posts the waiter
         BOOST_TEST_EQ(q.size(), 1u);
-        capy::abandon(q.front()); // torn down before it resumes
+        give_up(q.front()); // torn down before it resumes
         q.pop();
         pump(q);
         BOOST_TEST(!m.is_locked());
@@ -1200,7 +1200,7 @@ struct async_mutex_test
         ss.request_stop();
         BOOST_TEST_EQ(q.size(), 1u);
         p.reset();
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         pump(q);
         BOOST_TEST_EQ(down, 1);

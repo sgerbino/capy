@@ -102,7 +102,7 @@ public:
             return stop_task_->await_suspend(h, env);
         env_ = env;
         cont_ = continuation{h, env->owner};
-        env_->executor.post(chain_holder(cont_));
+        resume_via(env_->executor, cont_);
         return std::noop_coroutine();
     }
 
@@ -164,7 +164,7 @@ public:
     {
         env_ = env;
         cont_ = continuation{h, env->owner};
-        env_->executor.post(chain_holder(cont_));
+        resume_via(env_->executor, cont_);
         return std::noop_coroutine();
     }
 

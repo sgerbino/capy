@@ -185,7 +185,7 @@ public:
                     true, std::memory_order_acq_rel))
                 {
                     self_->canceled_ = true;
-                    self_->ex_.post(chain_holder(self_->cont_));
+                    resume_via(self_->ex_, self_->cont_);
                 }
             }
         };
@@ -590,7 +590,7 @@ public:
             if(!w->claimed_.exchange(true, std::memory_order_acq_rel))
             {
                 w->canceled_ = true;
-                w->ex_.post(chain_holder(w->cont_));
+                resume_via(w->ex_, w->cont_);
             }
         }
     }
@@ -669,7 +669,7 @@ public:
             auto* waiter = grant_next();
             if(!waiter)
                 break;
-            waiter->ex_.post(chain_holder(waiter->cont_));
+            resume_via(waiter->ex_, waiter->cont_);
             if(scope.gone)
                 return;
         }

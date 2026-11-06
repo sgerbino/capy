@@ -7,8 +7,8 @@
 // Official repository: https://github.com/cppalliance/capy
 //
 
-#ifndef BOOST_CAPY_EX_ABANDON_HPP
-#define BOOST_CAPY_EX_ABANDON_HPP
+#ifndef BOOST_CAPY_EX_CHAIN_OWNER_HPP
+#define BOOST_CAPY_EX_CHAIN_OWNER_HPP
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
@@ -31,8 +31,8 @@ namespace capy {
     the segment reaches the owner through its @ref await_context.
 
     When the holder of a suspended coroutine in the segment gives it up
-    with @ref abandon, the owner posts its own continuation to its
-    executor. There it unwinds the segment from the top: it destroys
+    by dropping its @ref chain_holder, the owner posts its own
+    continuation to its executor. There it unwinds the segment from the top: it destroys
     the frame it awaits, which destroys the frames below it in turn, and
     finishes without delivering a result. An executor that destroys the
     posted continuation instead, as a closed one does, unwinds the
@@ -83,7 +83,7 @@ public:
     {
         if(abandoned_.exchange(true, std::memory_order_acq_rel))
             return;
-        ex_.post(chain_holder(self_));
+        resume_via(ex_, self_);
     }
 };
 

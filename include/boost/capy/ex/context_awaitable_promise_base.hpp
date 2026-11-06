@@ -12,7 +12,7 @@
 #define BOOST_CAPY_EX_CONTEXT_AWAITABLE_PROMISE_BASE_HPP
 
 #include <boost/capy/detail/config.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/frame_alloc_mixin.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
@@ -78,8 +78,8 @@ namespace capy {
     the parent's `task`, so a chain is destroyed from its top down, each
     frame freeing the one it awaits. The suspended coroutine at the
     bottom is held by whoever will resume it: an operation, queue or
-    primitive. A holder that will never resume it calls @ref abandon,
-    which unwinds the chain's segment from its owner (see
+    primitive. A holder that will never resume it drops its
+    @ref chain_holder, which unwinds the chain's segment from its owner (see
     @ref chain_owner) rather than destroying the bottom frame.
     Destroying a frame that is still awaited, other than in that
     unwind, calls `std::terminate`.

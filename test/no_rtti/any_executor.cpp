@@ -52,7 +52,7 @@ struct local_executor
     execution_context& context() const noexcept { return *ctx; }
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
-    std::coroutine_handle<> dispatch(chain_holder&& h) const { return h.release()->h; }
+    std::coroutine_handle<> dispatch(chain_holder&& h) const { return h.take_handle(); }
     void post(chain_holder&& h) const { h.release(); }
 };
 

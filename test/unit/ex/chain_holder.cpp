@@ -12,10 +12,13 @@
 
 #include <boost/capy/ex/any_executor.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
+#include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/task.hpp>
 
 #include <coroutine>
+#include <exception>
+#include <memory_resource>
 #include <queue>
 #include <stdexcept>
 #include <type_traits>
@@ -90,6 +93,24 @@ struct throwing_executor
 
 static_assert(Executor<throwing_executor>);
 
+// Runs to its end on one resume and frees itself.
+struct one_shot
+{
+    struct promise_type
+    {
+        one_shot get_return_object()
+        {
+            return {std::coroutine_handle<promise_type>::from_promise(*this)};
+        }
+        std::suspend_always initial_suspend() noexcept { return {}; }
+        std::suspend_never final_suspend() noexcept { return {}; }
+        void return_void() noexcept {}
+        void unhandled_exception() { std::terminate(); }
+    };
+
+    std::coroutine_handle<promise_type> h;
+};
+
 } // namespace
 
 struct chain_holder_test
@@ -128,6 +149,94 @@ struct chain_holder_test
             }
             BOOST_TEST_EQ(down, 0);
         }
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    void testResumeEndsOwnership()
+    {
+        int ran = 0;
+        auto body = [](int* n) -> one_shot
+        {
+            ++*n;
+            co_return;
+        };
+        continuation c{body(&ran).h};
+        chain_holder h(c);
+        h.resume();
+        BOOST_TEST_EQ(ran, 1);
+        BOOST_TEST(!h);
+    }
+
+    void testResumeRestoresFrameAllocator()
+    {
+        auto body = []() -> one_shot
+        {
+            set_current_frame_allocator(std::pmr::null_memory_resource());
+            co_return;
+        };
+        auto* const before = get_current_frame_allocator();
+        set_current_frame_allocator(std::pmr::new_delete_resource());
+        continuation c{body().h};
+        chain_holder(c).resume();
+        BOOST_TEST(
+            get_current_frame_allocator() == std::pmr::new_delete_resource());
+        set_current_frame_allocator(before);
+    }
+
+    void testTakeHandleEndsOwnership()
+    {
+        int down = 0;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        {
+            auto t = probe(destroy_count_t(down));
+            continuation c{t.handle()};
+            {
+                chain_holder h(c);
+                BOOST_TEST(h.take_handle() == t.handle());
+                BOOST_TEST(!h);
+            }
+            BOOST_TEST_EQ(down, 0);
+        }
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    // The second claim on a field is the double abandon this prevents.
+    void testTakeClearsTheField()
+    {
+        continuation c{std::noop_coroutine()};
+        continuation* field = &c;
+        auto first = chain_holder::take(field);
+        auto second = chain_holder::take(field);
+        BOOST_TEST(field == nullptr);
+        BOOST_TEST(!second);
+        BOOST_TEST(first.release() == &c);
+    }
+
+    void testResumeViaPosts()
+    {
+        int down = 0;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        {
+            auto t = probe(destroy_count_t(down));
+            continuation c{t.handle()};
+            bool closed = false;
+            std::queue<continuation> q;
+            resume_via(dropping_executor{&q, &closed}, c);
+            BOOST_TEST_EQ(q.size(), 1u);
+            BOOST_TEST_EQ(down, 0);
+        }
+        BOOST_TEST_EQ(down, 1);
+    }
+
+    void testResumeViaGivesUpOnThrow()
+    {
+        int down = 0;
+        auto probe = [](destroy_count_t) -> task<void> { co_return; };
+        auto t = probe(destroy_count_t(down));
+        continuation c{t.handle()};
+        t.release();
+        BOOST_TEST_THROWS(
+            resume_via(throwing_executor{}, c), std::runtime_error);
         BOOST_TEST_EQ(down, 1);
     }
 
@@ -260,6 +369,12 @@ struct chain_holder_test
         testEmpty();
         testDestructorAbandons();
         testReleaseLeavesTheCoroutine();
+        testResumeEndsOwnership();
+        testResumeRestoresFrameAllocator();
+        testTakeHandleEndsOwnership();
+        testTakeClearsTheField();
+        testResumeViaPosts();
+        testResumeViaGivesUpOnThrow();
         testMoveTransfersOwnership();
         testMoveAssignAbandonsTheOld();
         testNoopCoroutineIsSafeToDrop();

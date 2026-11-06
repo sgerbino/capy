@@ -11,7 +11,7 @@
 #define BOOST_CAPY_DETAIL_ABANDONABLE_HPP
 
 #include <boost/capy/detail/config.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/await_context.hpp>
 
 #include <optional>

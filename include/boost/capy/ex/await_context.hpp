@@ -62,14 +62,14 @@ struct await_context
         Set by whatever started the segment (`run_async`, `run` on
         another executor, a `when_all` or `when_any` branch). An
         awaitable that parks or queues a coroutine copies it into the
-        @ref continuation it keeps, so a holder can @ref abandon the
+        @ref continuation it keeps, so a @ref chain_holder can give up the
         segment. Null when nothing owns the segment.
 
         A launcher that starts a task under an environment it builds
         itself, rather than through `run_async`, `run` or a join, must
         either own the segment, binding a @ref chain_owner, or ensure
         nothing awaits the coroutines that could be abandoned. With no
-        owner, @ref abandon destroys only the frame it is given, and any
+        owner, a @ref chain_holder destroys only the frame it is given, and any
         frame awaiting it is left holding a destroyed frame.
     */
     chain_owner* owner = nullptr;

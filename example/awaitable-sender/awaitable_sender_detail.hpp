@@ -12,7 +12,7 @@
 
 #include <boost/capy/concept/context_awaitable.hpp>
 #include <boost/capy/detail/await_suspend_helper.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/execution_context.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
@@ -270,7 +270,7 @@ class scheduler_executor
         {
             auto c = self_->c_;
             delete self_;
-            capy::abandon(c);
+            chain_holder held(c);
         }
     };
 

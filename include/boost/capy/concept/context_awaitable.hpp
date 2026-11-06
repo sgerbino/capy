@@ -110,7 +110,7 @@ concept AwaitSuspendResult =
     _Teardown_: An awaitable that holds the coroutine for later, rather than
     resuming it before returning, keeps it as a @ref continuation whose `owner`
     is `env->owner`. If the awaitable or whatever holds the coroutine for it is
-    torn down first, it passes that continuation to @ref abandon, which unwinds
+    torn down first, it drops a @ref chain_holder of that continuation, which unwinds
     the chain from its owner. A continuation without an owner is destroyed
     alone, leaving the frames above it holding a destroyed frame.
 

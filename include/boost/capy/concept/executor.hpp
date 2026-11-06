@@ -115,13 +115,13 @@ class execution_context;
     @par Frame Allocator TLS
 
     The library propagates a frame allocator via thread-local
-    storage. When a custom executor's event loop calls
-    `.resume()` to drain its work queue, it must use
-    `safe_resume()` from `<boost/capy/ex/frame_allocator.hpp>`
-    instead of calling `h.resume()` directly. This saves and
-    restores the thread-local frame allocator around the call,
-    preventing a resumed coroutine from permanently overwriting
-    the caller's value.
+    storage. A custom executor's event loop drains its work queue
+    with @ref chain_holder::resume, which saves and restores the
+    thread-local frame allocator around the call, preventing a
+    resumed coroutine from permanently overwriting the caller's
+    value. A loop that holds a raw `std::coroutine_handle<>` must
+    use `safe_resume()` from `<boost/capy/ex/frame_allocator.hpp>`
+    instead of calling `h.resume()` directly.
 
     @par Executor Validity
 
@@ -149,7 +149,7 @@ class execution_context;
     them where an exception cannot propagate, and `std::terminate` is
     called: while a @ref task is suspending, which includes
     @ref when_all and @ref when_any starting their children and
-    @ref run moving to its executor; when @ref abandon posts an
+    @ref run moving to its executor; when a @ref chain_holder posts an
     unwind; when a join or a @ref run boundary resumes the
     coroutine awaiting it; and when @ref async_mutex, @ref async_event
     or @ref async_waker resumes a waiter, whether from an unlock, a

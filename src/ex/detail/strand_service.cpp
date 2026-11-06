@@ -159,7 +159,7 @@ public:
         // pop() reads the link first: the resumed coroutine may destroy
         // the continuation before control returns here.
         while(auto h = batch.pop())
-            safe_resume(h.release()->h);
+            h.resume();
     }
 
     static bool

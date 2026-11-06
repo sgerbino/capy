@@ -11,7 +11,7 @@
 #include <boost/capy/ex/async_waker.hpp>
 
 #include <boost/capy/cond.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/thread_pool.hpp>
 #include <boost/capy/task.hpp>
@@ -460,7 +460,7 @@ struct async_waker_test
         pump(q);
         p->wake();
         BOOST_TEST_EQ(q.size(), 1u);
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         pump(q);
         p.reset();
@@ -568,7 +568,7 @@ struct async_waker_test
         ss.request_stop();
         BOOST_TEST_EQ(q.size(), 1u);
         p.reset();
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         pump(q);
         BOOST_TEST_EQ(down, 1);
@@ -590,7 +590,7 @@ struct async_waker_test
         p->wake();
         BOOST_TEST_EQ(q.size(), 1u);
         p.reset();
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         pump(q);
         BOOST_TEST_EQ(down, 1);

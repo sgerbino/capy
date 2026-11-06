@@ -9,7 +9,7 @@
 //
 
 // Test that header file is self-contained.
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/context_awaitable_promise_base.hpp>
@@ -185,7 +185,7 @@ struct holder_param
         if(h && *h)
         {
             auto c = std::exchange(*h, parked{});
-            capy::abandon(c);
+            give_up(c);
         }
     }
 };
@@ -201,7 +201,7 @@ struct parking_lot
     ~parking_lot()
     {
         for(auto& c : hs)
-            capy::abandon(c);
+            give_up(c);
     }
 
     struct awaiter
@@ -294,7 +294,7 @@ struct counting_executor
 
 } // namespace
 
-struct abandon_test
+struct chain_owner_test
 {
     // A holder owned by a frame that the teardown destroys: every
     // parked coroutine's parent is collected, with no limit on how many.
@@ -329,7 +329,7 @@ struct abandon_test
         BOOST_TEST(slot);
         BOOST_TEST_EQ(inner_down, 0);
 
-        capy::abandon(slot);
+        give_up(slot);
         pump(q);
         BOOST_TEST_EQ(inner_down, count);
         BOOST_TEST_EQ(outer_down, count);
@@ -362,7 +362,7 @@ struct abandon_test
                 struct exit_holder
                 {
                     parked* h;
-                    ~exit_holder() { capy::abandon(*h); }
+                    ~exit_holder() { give_up(*h); }
                 };
                 thread_local exit_holder holder{&slot};
             }).join();
@@ -386,7 +386,7 @@ struct abandon_test
                 ~exit_holder()
                 {
                     if(h)
-                        capy::abandon(h);
+                        give_up(h);
                 }
             };
             thread_local exit_holder holder;
@@ -431,7 +431,7 @@ struct abandon_test
         struct unwind_holder
         {
             parked* h;
-            ~unwind_holder() { capy::abandon(*h); }
+            ~unwind_holder() { give_up(*h); }
         };
         try
         {
@@ -469,7 +469,7 @@ struct abandon_test
                 parent(&slot, destroy_count_t(parent_down)));
             BOOST_TEST(slot);
 
-            capy::abandon(slot);
+            give_up(slot);
         }
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
@@ -511,7 +511,7 @@ struct abandon_test
         BOOST_TEST(slot);
         BOOST_TEST(other);
 
-        capy::abandon(slot);
+        give_up(slot);
         BOOST_TEST_EQ(other_down, 1);
         BOOST_TEST_EQ(other_parent_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
@@ -542,7 +542,7 @@ struct abandon_test
         if(!BOOST_TEST(done.try_acquire_for(std::chrono::seconds(30))))
             return;
 
-        capy::abandon(slot);
+        give_up(slot);
         pool.join();
         BOOST_TEST(child_at == pool_thread);
         BOOST_TEST(root_at == pool_thread);
@@ -575,7 +575,7 @@ struct abandon_test
         if(!BOOST_TEST(done.try_acquire_for(std::chrono::seconds(30))))
             return;
 
-        capy::abandon(slot);
+        give_up(slot);
         // The launch holds work on the caller until its unwind is done,
         // which follows the inner one.
         caller.join();
@@ -606,7 +606,7 @@ struct abandon_test
         auto t = probe(destroy_count_t(down));
         continuation c{t.handle()};
         t.release();
-        capy::abandon(c);
+        give_up(c);
         BOOST_TEST_EQ(down, 1);
     }
 
@@ -627,8 +627,8 @@ struct abandon_test
 };
 
 TEST_SUITE(
-    abandon_test,
-    "boost.capy.ex.abandon");
+    chain_owner_test,
+    "boost.capy.ex.chain_owner");
 
 } // capy
 } // boost

@@ -14,7 +14,7 @@
 #include <boost/capy/concept/execution_context.hpp>
 #include <boost/capy/concept/executor.hpp>
 #include <coroutine>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/execution_context.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
@@ -52,6 +52,13 @@
 
 namespace boost {
 namespace capy {
+
+/// Give up a coroutine, as a holder does when it dies.
+inline void
+give_up(continuation& c) noexcept
+{
+    chain_holder held(c);
+}
 
 //----------------------------------------------------------
 // Test Utilities
@@ -113,13 +120,13 @@ struct test_executor
     {
         if(dispatch_count_)
             ++(*dispatch_count_);
-        return h.release()->h;
+        return h.take_handle();
     }
 
     void
     post(chain_holder&& h) const
     {
-        h.release()->h.resume();
+        h.resume();
     }
 };
 
@@ -262,7 +269,7 @@ struct self_destroy_awaitable
     std::coroutine_handle<> await_suspend(std::coroutine_handle<> h, await_context const* env)
     {
         continuation c{h, env->owner};
-        capy::abandon(c);
+        give_up(c);
         return std::noop_coroutine();
     }
     void await_resume() {}
@@ -559,7 +566,7 @@ struct closing_executor
 
     std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        return h.release()->h;
+        return h.take_handle();
     }
 
     void post(chain_holder&& h) const

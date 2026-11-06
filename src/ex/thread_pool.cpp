@@ -12,7 +12,7 @@
 #include <boost/capy/ex/ready_queue.hpp>
 #include <boost/capy/continuation.hpp>
 #include <boost/capy/detail/thread_local_ptr.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/test/thread_name.hpp>
 #include <algorithm>

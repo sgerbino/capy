@@ -9,7 +9,7 @@
 
 #include <boost/capy/test/run_blocking.hpp>
 
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/ex/ready_queue.hpp>
 
@@ -136,7 +136,7 @@ blocking_context::run()
                 break;
             h = impl_->queue.pop();
         }
-        safe_resume(h.release()->h);
+        h.resume();
     }
     if(impl_->ep)
         std::rethrow_exception(impl_->ep);
@@ -183,7 +183,7 @@ blocking_executor::dispatch(
     chain_holder&& h) const
 {
     if(running_ == ctx_)
-        return h.release()->h;
+        return h.take_handle();
     ctx_->enqueue(std::move(h));
     return std::noop_coroutine();
 }

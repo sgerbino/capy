@@ -12,7 +12,7 @@
 #include <boost/capy/ex/run_async.hpp>
 
 #include <boost/capy/task.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/execution_context.hpp>
 #include <boost/capy/ex/this_coro.hpp>
 
@@ -96,12 +96,12 @@ struct sync_executor
     {
         if(dispatch_count_)
             ++(*dispatch_count_);
-        return h.release()->h;
+        return h.take_handle();
     }
 
     void post(chain_holder&& h) const
     {
-        h.release()->h.resume();
+        h.resume();
     }
 };
 
@@ -345,7 +345,7 @@ struct run_async_test
             BOOST_TEST_EQ(q.size(), 1u);
             auto h = q.front();
             q.pop();
-            capy::abandon(h);
+            give_up(h);
             pump(q);
         }
         BOOST_TEST_EQ(task_down, 1);
@@ -373,7 +373,7 @@ struct run_async_test
             BOOST_TEST_EQ(q.size(), 1u);
             auto h = q.front();
             q.pop();
-            capy::abandon(h);
+            give_up(h);
             pump(q);
         }
         BOOST_TEST_EQ(task_down, 1);

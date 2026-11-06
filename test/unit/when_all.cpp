@@ -13,7 +13,7 @@
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
 #include <boost/capy/ex/async_event.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/this_coro.hpp>
@@ -1326,13 +1326,13 @@ struct when_all_results_test
 
         // An unstarted runner owns no branch: the branches stay with the
         // join until it is unwound.
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         BOOST_TEST_EQ(a_down, 0);
         BOOST_TEST_EQ(b_down, 0);
         BOOST_TEST_EQ(parent_down, 0);
 
-        capy::abandon(q.front());
+        give_up(q.front());
         q.pop();
         pump(q);
         BOOST_TEST_EQ(a_down, 1);
@@ -1362,10 +1362,10 @@ struct when_all_results_test
         test_executor ex(n);
         run_async(ex)(parent(destroy_count_t(parent_down)));
         BOOST_TEST(sa && sb);
-        capy::abandon(sa);
+        give_up(sa);
         BOOST_TEST_EQ(a_down, 1);
         BOOST_TEST_EQ(parent_down, 0); // b still holds a share
-        capy::abandon(sb);
+        give_up(sb);
         BOOST_TEST_EQ(b_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
     }
@@ -1390,7 +1390,7 @@ struct when_all_results_test
         int n = 0;
         test_executor ex(n);
         run_async(ex)(parent(destroy_count_t(parent_down)));
-        capy::abandon(sa);
+        give_up(sa);
         sb.resume();
         BOOST_TEST(!resumed);
         BOOST_TEST_EQ(parent_down, 1);
@@ -1420,8 +1420,8 @@ struct when_all_results_test
         test_executor ex(n);
         run_async(ex, counting_allocator<std::byte>(st))(
             parent(&sa, &sb, destroy_count_t(parent_down)));
-        capy::abandon(sa);
-        capy::abandon(sb);
+        give_up(sa);
+        give_up(sb);
         BOOST_TEST_EQ(parent_down, 1);
         BOOST_TEST(st.allocs > 0);
         BOOST_TEST(st.balanced());
@@ -1454,8 +1454,8 @@ struct when_all_results_test
         };
         run_async(ex)(owner(destroy_count_t(owner_down)));
         BOOST_TEST(sa && sb);
-        capy::abandon(sa);
-        capy::abandon(sb);
+        give_up(sa);
+        give_up(sb);
         BOOST_TEST_EQ(a_down, 1);
         BOOST_TEST_EQ(b_down, 1);
         BOOST_TEST_EQ(owner_down, 1);
@@ -1490,7 +1490,7 @@ struct when_all_results_test
         for(int i = 0; i < count; ++i)
         {
             BOOST_TEST(slots[i]);
-            capy::abandon(slots[i]);
+            give_up(slots[i]);
             for(int j = 0; j < count; ++j)
                 BOOST_TEST_EQ(down[j], j <= i ? 1 : 0);
             BOOST_TEST_EQ(parent_down, i == count - 1 ? 1 : 0);
@@ -1519,7 +1519,7 @@ struct when_all_results_test
         run_async(ex)(parent(destroy_count_t(parent_down)));
         sa.resume();
         BOOST_TEST_EQ(parent_down, 0);
-        capy::abandon(sb);
+        give_up(sb);
         BOOST_TEST(!resumed);
         BOOST_TEST_EQ(parent_down, 1);
     }
@@ -1552,12 +1552,12 @@ struct when_all_results_test
         test_executor ex(n);
         run_async(ex)(parent(destroy_count_t(parent_down)));
         BOOST_TEST(sa && sb && sc);
-        capy::abandon(sb);
-        capy::abandon(sa);
+        give_up(sb);
+        give_up(sa);
         BOOST_TEST_EQ(leaf_down, 2);
         BOOST_TEST_EQ(inner_down, 0);
         BOOST_TEST_EQ(parent_down, 0);
-        capy::abandon(sc);
+        give_up(sc);
         BOOST_TEST_EQ(leaf_down, 3);
         BOOST_TEST_EQ(inner_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
@@ -1624,7 +1624,7 @@ struct when_all_results_test
         pump(q);
         BOOST_TEST(sa && sb);
 
-        capy::abandon(sa);
+        give_up(sa);
         BOOST_TEST_EQ(leaf_down, 1);
         BOOST_TEST_EQ(hop_down, 0); // lost on the caller's executor
         BOOST_TEST(!q.empty());
@@ -1632,7 +1632,7 @@ struct when_all_results_test
         BOOST_TEST_EQ(hop_down, 1);
         BOOST_TEST_EQ(parent_down, 0);
 
-        capy::abandon(sb);
+        give_up(sb);
         pump(q);
         BOOST_TEST_EQ(leaf_down, 2);
         BOOST_TEST_EQ(hop_down, 2);
@@ -1680,7 +1680,7 @@ struct when_all_results_test
             {
                 auto c = q.front();
                 q.pop();
-                capy::abandon(c);
+                give_up(c);
             }
             BOOST_TEST_EQ(owner_down, 1);
             BOOST_TEST(mr.balanced());
@@ -1709,9 +1709,9 @@ struct when_all_results_test
         test_executor ex(n);
         run_async(ex)(parent());
         BOOST_TEST(!seen.stop_requested());
-        capy::abandon(sa);
+        give_up(sa);
         BOOST_TEST(seen.stop_requested());
-        capy::abandon(sb);
+        give_up(sb);
     }
 
     void

@@ -19,7 +19,7 @@
 #include <coroutine>
 #include <boost/capy/detail/abandonable.hpp>
 #include <boost/capy/detail/owned_range.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/frame_alloc_mixin.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
@@ -109,10 +109,7 @@ struct when_all_core
         lost_.store(true, std::memory_order_relaxed);
         stop_source_.request_stop();
         if(remaining_count_.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        {
-            auto parent = continuation_;
-            capy::abandon(parent);
-        }
+            std::ignore = chain_holder(continuation_);
     }
 
     explicit when_all_core(std::size_t count) noexcept
@@ -292,13 +289,12 @@ struct when_all_runner
                     auto remaining = counter->fetch_sub(1, std::memory_order_acq_rel);
                     if(remaining != 1)
                         return detail::symmetric_transfer(std::noop_coroutine());
+                    // Dropped here when a branch was lost: the parent
+                    // unwinds instead of resuming.
+                    chain_holder parent(cont);
                     if(lost->load(std::memory_order_relaxed))
-                    {
-                        auto parent = cont;
-                        capy::abandon(parent);
                         return detail::symmetric_transfer(std::noop_coroutine());
-                    }
-                    return detail::symmetric_transfer(caller_env->executor.dispatch(chain_holder(cont)));
+                    return detail::symmetric_transfer(caller_env->executor.dispatch(std::move(parent)));
                 }
                 void await_resume() const noexcept {} // LCOV_EXCL_LINE final_suspend awaiter, never resumed
             };
@@ -500,7 +496,7 @@ private:
             &h.promise().segment_};
 
         state_->runner_handles_[I].h = std::coroutine_handle<>{h};
-        state_->core_.caller_env_->executor.post(chain_holder(state_->runner_handles_[I]));
+        resume_via(state_->core_.caller_env_->executor, state_->runner_handles_[I]);
     }
 };
 
@@ -597,7 +593,7 @@ public:
         auto* handles = state_->runner_handles_.get();
         std::size_t count = state_->core_.remaining_count_.load(std::memory_order_relaxed);
         for(std::size_t i = 0; i < count; ++i)
-            caller_env->executor.post(chain_holder(handles[i]));
+            resume_via(caller_env->executor, handles[i]);
 
         return std::noop_coroutine();
     }

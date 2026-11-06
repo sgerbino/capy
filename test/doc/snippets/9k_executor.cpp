@@ -14,7 +14,7 @@
 
 #include <boost/capy/concept/executor.hpp>
 #include <boost/capy/continuation.hpp>
-#include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_owner.hpp>
 #include <boost/capy/ex/await_context.hpp>
 #include <boost/capy/ex/execution_context.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
@@ -53,7 +53,7 @@ public:
     std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
     {
         if(ctx_.running_in_this_thread())
-            return h.release()->h;            // symmetric transfer
+            return h.take_handle();            // symmetric transfer
         post(std::move(h));
         return std::noop_coroutine();
     }

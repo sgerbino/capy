@@ -72,7 +72,7 @@ public:
     {
         owner_ = std::this_thread::get_id();
         while (auto h = queue_.pop())
-            capy::safe_resume(h.release()->h);
+            h.resume();
     }
 
     void enqueue(capy::chain_holder&& h)
@@ -116,7 +116,7 @@ public:
         capy::chain_holder&& h) const
     {
         if (loop_->is_running_on_this_thread())
-            return h.release()->h;     // resume inline
+            return h.take_handle();     // resume inline
         loop_->enqueue(std::move(h));
         return std::noop_coroutine();  // defer
     }

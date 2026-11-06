@@ -129,7 +129,7 @@ struct bridge_receiver
         result_->template emplace<1>(
             std::forward<Args>(args)...);
         // resume on the caller's executor
-        env_->executor.post(capy::chain_holder(cont_));
+        capy::resume_via(env_->executor, cont_);
     }
     // end::set_value[]
 
@@ -159,7 +159,7 @@ struct bridge_receiver
                 std::make_exception_ptr(
                     std::forward<E>(e)));
         }
-        env_->executor.post(capy::chain_holder(cont_));
+        capy::resume_via(env_->executor, cont_);
     }
 
     void set_stopped() && noexcept
@@ -167,7 +167,7 @@ struct bridge_receiver
         constexpr auto idx = HasEc ? 4 : 3;
         result_->template emplace<idx>(
             stopped_t{});
-        env_->executor.post(capy::chain_holder(cont_));
+        capy::resume_via(env_->executor, cont_);
     }
 };
 
