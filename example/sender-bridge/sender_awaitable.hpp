@@ -129,7 +129,7 @@ struct bridge_receiver
         result_->template emplace<1>(
             std::forward<Args>(args)...);
         // resume on the caller's executor
-        env_->executor.post(cont_);
+        env_->executor.post(capy::chain_holder(cont_));
     }
     // end::set_value[]
 
@@ -159,7 +159,7 @@ struct bridge_receiver
                 std::make_exception_ptr(
                     std::forward<E>(e)));
         }
-        env_->executor.post(cont_);
+        env_->executor.post(capy::chain_holder(cont_));
     }
 
     void set_stopped() && noexcept
@@ -167,7 +167,7 @@ struct bridge_receiver
         constexpr auto idx = HasEc ? 4 : 3;
         result_->template emplace<idx>(
             stopped_t{});
-        env_->executor.post(cont_);
+        env_->executor.post(capy::chain_holder(cont_));
     }
 };
 
@@ -262,7 +262,7 @@ struct [[nodiscard]] sender_awaitable
             beman::execution::connect(
                 std::move(sndr_),
                 receiver_type{
-                    &result_, {h, nullptr, env->owner}, env}));
+                    &result_, continuation{h, env->owner}, env}));
         op_constructed_ = true;
         beman::execution::start(
             *std::launder(

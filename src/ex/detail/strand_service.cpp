@@ -10,6 +10,7 @@
 #include "src/ex/detail/strand_impl.hpp"
 #include <boost/capy/ex/detail/strand_service.hpp>
 #include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/frame_allocator.hpp>
 #include <boost/capy/detail/config.hpp>
 #include <coroutine>
 #include <memory>
@@ -84,6 +85,9 @@ public:
     static strand_service_impl*
     enqueue(strand_impl& impl, continuation& c)
     {
+        // Declared before the lock: a shut down strand drops it, and
+        // the abandon must run unlocked.
+        chain_holder h(c);
         // A closed strand never locks: the mutex it borrowed may have
         // gone with its service.
         if(impl.service_.load(std::memory_order_acquire))
@@ -91,7 +95,7 @@ public:
             std::lock_guard<std::mutex> lock(*impl.mutex_);
             if(auto* svc = impl.service_.load(std::memory_order_relaxed))
             {
-                impl.pending_.push(c);
+                impl.pending_.push(std::move(h));
                 if(!impl.locked_)
                 {
                     impl.locked_ = true;
@@ -100,8 +104,6 @@ public:
                 return nullptr;
             }
         }
-        // Shut down: nothing will run it, so abandon it as its holder.
-        capy::abandon(c);
         return nullptr;
     }
 
@@ -122,9 +124,10 @@ public:
             return withdrawal::taken;
         // Nothing takes from the queue while it waits for an invoker,
         // so `c` is still first.
-        BOOST_CAPY_ASSERT(impl.pending_.front() == &c);
+        auto* front = impl.pending_.pop().release();
+        BOOST_CAPY_ASSERT(front == &c);
+        std::ignore = front;
         std::ignore = c;
-        impl.pending_.pop_front();
         // Posts queued behind `c` returned trusting its invoker, so
         // the strand stays locked until one runs them.
         if(!impl.pending_.empty())
@@ -137,26 +140,26 @@ public:
     static void
     abandon_pending(strand_impl& impl) noexcept
     {
-        strand_queue::taken_batch batch;
-        {
-            std::lock_guard<std::mutex> lock(*impl.mutex_);
-            if(!impl.service_.load(std::memory_order_relaxed))
-                return;
-            batch = impl.pending_.take_all();
-            impl.locked_ = false;
-        }
-        strand_queue::abandon_batch(batch);
+        ready_queue<> doomed;
+        std::lock_guard<std::mutex> lock(*impl.mutex_);
+        if(!impl.service_.load(std::memory_order_relaxed))
+            return;
+        doomed.splice(impl.pending_);
+        impl.locked_ = false;
     }
 
     static void
     dispatch_pending(strand_impl& impl)
     {
-        strand_queue::taken_batch batch;
+        ready_queue<> batch;
         {
             std::lock_guard<std::mutex> lock(*impl.mutex_);
-            batch = impl.pending_.take_all();
+            batch.splice(impl.pending_);
         }
-        impl.pending_.dispatch_batch(batch);
+        // pop() reads the link first: the resumed coroutine may destroy
+        // the continuation before control returns here.
+        while(auto h = batch.pop())
+            safe_resume(h.release()->h);
     }
 
     static bool
@@ -194,8 +197,10 @@ protected:
     void
     shutdown() override
     {
-        strand_queue::taken_batch doomed;
         {
+            // Dropped outside the mutexes: a destroyed frame may drop
+            // the last strand handle and re-enter the service.
+            ready_queue<> doomed;
             std::lock_guard<std::mutex> lock(mutex_);
             shutdown_ = true;
             while(auto* p = impl_list_.pop_front())
@@ -203,20 +208,9 @@ protected:
                 std::lock_guard<std::mutex> impl_lock(*p->mutex_);
                 p->locked_ = true;
                 p->service_.store(nullptr, std::memory_order_release);
-                auto b = p->pending_.take_all();
-                if(b.head)
-                {
-                    if(doomed.tail)
-                        doomed.tail->reserved = b.head;
-                    else
-                        doomed.head = b.head;
-                    doomed.tail = b.tail;
-                }
+                doomed.splice(p->pending_);
             }
         }
-        // Outside the mutexes: a destroyed frame may drop the last
-        // strand handle and re-enter the service.
-        strand_queue::abandon_batch(doomed);
 
         void* fp = invoker_frame_cache_.exchange(
             kCacheClosed, std::memory_order_acq_rel);
@@ -331,12 +325,14 @@ strand_service_impl::post_invoker(
     auto invoker = make_invoker(svc, std::move(impl));
     auto& self = invoker.h_.promise().self_;
     self.h = invoker.h_;
+    chain_holder held(self);
     try
     {
-        ex.post(self);
+        ex.post(std::move(held));
     }
     catch(...)
     {
+        held.release();
         invoker.h_.destroy();
         throw;
     }
@@ -385,8 +381,7 @@ strand_impl::~strand_impl()
         svc->impl_list_.remove(this);
     }
     // Nothing can run these any more: give them up.
-    auto batch = pending_.take_all();
-    strand_queue::abandon_batch(batch);
+    ready_queue<> doomed(std::move(pending_));
 }
 
 strand_service::

@@ -53,6 +53,9 @@
 
 // Execution
 #include <boost/capy/ex/abandon.hpp>
+#include <boost/capy/ex/chain_holder.hpp>
+#include <boost/capy/ex/parking_service.hpp>
+#include <boost/capy/ex/ready_queue.hpp>
 #include <boost/capy/ex/any_executor.hpp>
 #include <boost/capy/ex/async_event.hpp>
 #include <boost/capy/ex/async_mutex.hpp>

@@ -318,18 +318,20 @@ public:
         return sched_ == other.sched_;
     }
 
-    void post(continuation& c) const
+    void post(chain_holder&& h) const
     {
-        // the holder frees itself from the receiver on completion
-        auto* p = new holder(sched_, c);
-        ex::start(p->op_);
+        h.transfer([this](continuation& c) {
+            // the holder frees itself from the receiver on completion
+            auto* p = new holder(sched_, c);
+            ex::start(p->op_);
+        });
     }
 
     // A generic scheduler cannot answer "is the current thread
     // yours", so dispatch degrades to post.
-    std::coroutine_handle<> dispatch(continuation& c) const
+    std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        post(c);
+        post(std::move(h));
         return std::noop_coroutine();
     }
 };

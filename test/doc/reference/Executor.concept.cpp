@@ -50,16 +50,17 @@ public:
     }
 
     std::coroutine_handle<> dispatch(
-        capy::continuation& c ) const
+        capy::chain_holder&& h ) const
     {
         if( std::this_thread::get_id() == home_ )
-            return c.h;            // symmetric transfer
-        post( c );
+            return h.release()->h; // symmetric transfer
+        post( std::move( h ) );
         return std::noop_coroutine();
     }
 
-    void post( capy::continuation& ) const
+    void post( capy::chain_holder&& h ) const
     {
+        h.release();
         // enqueue for later execution on this executor's context
     }
 };

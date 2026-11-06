@@ -49,19 +49,18 @@ struct queue_executor
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(capy::continuation& c) const
+    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
     {
-        post(c);
+        post(std::move(h));
         return std::noop_coroutine();
     }
 
     // A closed executor gives up what is posted to it.
-    void post(capy::continuation& c) const
+    void post(capy::chain_holder&& h) const
     {
         if(closed && *closed)
-            capy::abandon(c);
-        else
-            q->push(c);
+            return;
+        q->push(*h.release());
     }
 };
 
@@ -95,7 +94,7 @@ struct yield_awaitable
     {
         c_.h = h;
         c_.owner = env->owner;
-        env->executor.post(c_);
+        env->executor.post(capy::chain_holder(c_));
     }
     void await_resume() const noexcept {}
 };

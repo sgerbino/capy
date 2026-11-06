@@ -110,7 +110,7 @@ class stream
             if(! claimed ||
                 ! claimed->exchange(true, std::memory_order_acq_rel))
             {
-                ex.post(*c);
+                ex.post(chain_holder(*c));
             }
         }
 
@@ -272,7 +272,7 @@ public:
                         true, std::memory_order_acq_rel))
                     {
                         self_->canceled_ = true;
-                        self_->ex_.post(self_->cont_);
+                        self_->ex_.post(chain_holder(self_->cont_));
                     }
                 }
             };

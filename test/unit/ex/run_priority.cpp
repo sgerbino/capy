@@ -111,7 +111,7 @@ struct run_priority_test
 
         auto sibling_coro = make_log_coro(log, "sibling");
         continuation sibling_cont{sibling_coro.handle()};
-        pe.post(sibling_cont);
+        pe.post(chain_holder(sibling_cont));
         sibling_coro.release();
 
         pump(q);
@@ -152,7 +152,7 @@ struct run_priority_test
 
             auto pending_high_coro = make_log_coro(log, "pending_high");
             continuation pending_high_cont{pending_high_coro.handle()};
-            pe.post_high(pending_high_cont);
+            pe.post_high(chain_holder(pending_high_cont));
             pending_high_coro.release();
 
             int dummy = 0;

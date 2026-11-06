@@ -153,8 +153,8 @@ struct counting_executor
     execution_context& context() const noexcept { return *ctx_; }
     void on_work_started() const noexcept { ++ctx_->work; }
     void on_work_finished() const noexcept { --ctx_->work; }
-    std::coroutine_handle<> dispatch(continuation& c) const { return c.h; }
-    void post(continuation&) const { }
+    std::coroutine_handle<> dispatch(chain_holder&& h) const { return h.release()->h; }
+    void post(chain_holder&& h) const { h.release(); }
 };
 
 static_assert(Executor<counting_executor>);
@@ -368,7 +368,7 @@ struct any_executor_test
         std::atomic<int> counter{0};
         auto coro = make_counter_coro(counter);
         continuation c{coro.handle()};
-        ex.dispatch(c);
+        ex.dispatch(chain_holder(c));
         coro.release();
 
         BOOST_TEST(wait_for([&]{ return counter.load() >= 1; }));
@@ -385,7 +385,7 @@ struct any_executor_test
         std::atomic<int> counter{0};
         auto coro = make_counter_coro(counter);
         continuation c{coro.handle()};
-        ex.post(c);
+        ex.post(chain_holder(c));
         coro.release();
 
         BOOST_TEST(wait_for([&]{ return counter.load() >= 1; }));
@@ -421,7 +421,7 @@ struct any_executor_test
         for(int i = 0; i < N; ++i)
         {
             conts[i] = continuation{coros[i].handle()};
-            ex.post(conts[i]);
+            ex.post(chain_holder(conts[i]));
             coros[i].release();
         }
 
@@ -456,11 +456,11 @@ struct any_executor_test
         BOOST_TEST(ex2 == ex3);
 
         // Post through different copies
-        ex1.post(c1);
+        ex1.post(chain_holder(c1));
         coro1.release();
-        ex2.post(c2);
+        ex2.post(chain_holder(c2));
         coro2.release();
-        ex3.post(c3);
+        ex3.post(chain_holder(c3));
         coro3.release();
 
         BOOST_TEST(wait_for([&]{ return counter.load() >= 3; }));

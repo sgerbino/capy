@@ -649,14 +649,14 @@ struct run_test
         }
         void on_work_started() const noexcept { ++*work_; }
         void on_work_finished() const noexcept { --*work_; }
-        std::coroutine_handle<> dispatch(continuation& c) const
+        std::coroutine_handle<> dispatch(chain_holder&& h) const
         {
-            q_->push(c);
+            q_->push(*h.release());
             return std::noop_coroutine();
         }
-        void post(continuation& c) const
+        void post(chain_holder&& h) const
         {
-            q_->push(c);
+            q_->push(*h.release());
         }
     };
 
@@ -858,17 +858,16 @@ struct run_test
             }
             void on_work_started() const noexcept {}
             void on_work_finished() const noexcept {}
-            std::coroutine_handle<> dispatch(continuation& c) const
+            std::coroutine_handle<> dispatch(chain_holder&& h) const
             {
-                post(c);
+                post(std::move(h));
                 return std::noop_coroutine();
             }
-            void post(continuation& c) const
+            void post(chain_holder&& h) const
             {
                 if(*closed_)
-                    capy::abandon(c);
-                else
-                    q_->push(c);
+                    return;
+                q_->push(*h.release());
             }
         };
         alloc_counts st;
@@ -1037,11 +1036,11 @@ struct run_test
         }
         void on_work_started() const noexcept {}
         void on_work_finished() const noexcept {}
-        std::coroutine_handle<> dispatch(continuation&) const
+        std::coroutine_handle<> dispatch(chain_holder&&) const
         {
             throw std::runtime_error("dispatch");
         }
-        void post(continuation&) const
+        void post(chain_holder&&) const
         {
             throw std::runtime_error("post");
         }

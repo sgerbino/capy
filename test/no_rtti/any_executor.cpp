@@ -52,8 +52,8 @@ struct local_executor
     execution_context& context() const noexcept { return *ctx; }
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
-    std::coroutine_handle<> dispatch(continuation& c) const { return c.h; }
-    void post(continuation&) const {}
+    std::coroutine_handle<> dispatch(chain_holder&& h) const { return h.release()->h; }
+    void post(chain_holder&& h) const { h.release(); }
 };
 
 using exec_a = local_executor<0>;

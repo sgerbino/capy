@@ -13,10 +13,12 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/chain_holder.hpp>
 
 #include <concepts>
 #include <coroutine>
 #include <type_traits>
+#include <utility>
 
 namespace boost {
 namespace capy {
@@ -46,8 +48,8 @@ class execution_context;
         from `execution_context`, `noexcept`.
     @li `ce.on_work_started()` must be valid and `noexcept`.
     @li `ce.on_work_finished()` must be valid and `noexcept`.
-    @li `ce.dispatch(c)` must return `std::coroutine_handle<>`.
-    @li `ce.post(c)` must be valid.
+    @li `ce.dispatch(std::move(h))` must return `std::coroutine_handle<>`.
+    @li `ce.post(std::move(h))` must be valid.
 
     @par Semantic Requirements
 
@@ -125,17 +127,16 @@ class execution_context;
 
     Once `ctx.shutdown()` has begun, the context runs no more work.
     `dispatch` and `post` remain valid until the context is destroyed,
-    but never run the coroutine they are given: the executor passes
-    the continuation to @ref abandon, either at once or no later than
-    the context's destruction, as a context does with the coroutines
-    it holds. An executor takes a continuation off its queue before it
-    resumes or abandons it. A queued copy keeps the continuation's
-    `owner`, which @ref abandon needs. An abandon made inside `post` may
-    unwind the chain before `post` returns, so it is the executor's last
-    touch of the continuation, and of the executor object itself, which
-    may live in a frame the unwind destroys. A `post` that throws has
-    neither queued nor abandoned the continuation; the caller still
-    holds it. Copy, comparison, `context()`,
+    but never run the coroutine they are given: an executor that
+    returns without taking the @ref chain_holder leaves it with the
+    caller, whose holder abandons the coroutine. Otherwise it keeps the
+    holder no later than the context's destruction. Take the parameter
+    as `chain_holder&&`, not by value, so that a `post` that throws has
+    neither queued nor abandoned the coroutine; the caller still holds
+    it. Dropping a holder inside `post` may unwind the chain before
+    `post` returns, so it is the executor's last touch of the executor
+    object itself, which may live in a frame the unwind destroys. Copy,
+    comparison, `context()`,
     `on_work_started`, and `on_work_finished` also remain valid until
     the context is destroyed. Calling any member after the context is
     destroyed is undefined behavior.
@@ -170,7 +171,7 @@ template<class E>
 concept Executor =
     std::is_nothrow_copy_constructible_v<E> &&
     std::is_nothrow_move_constructible_v<E> &&
-    requires(E& e, E const& ce, E const& ce2, continuation c) {
+    requires(E& e, E const& ce, E const& ce2, chain_holder h) {
         { ce == ce2 } noexcept -> std::convertible_to<bool>;
         { ce.context() } noexcept;
         requires std::is_lvalue_reference_v<decltype(ce.context())> &&
@@ -180,8 +181,8 @@ concept Executor =
         { ce.on_work_started() } noexcept;
         { ce.on_work_finished() } noexcept;
 
-        { ce.dispatch(c) } -> std::same_as<std::coroutine_handle<>>;
-        { ce.post(c) };
+        { ce.dispatch(std::move(h)) } -> std::same_as<std::coroutine_handle<>>;
+        { ce.post(std::move(h)) };
     };
 // end::executor_concept[]
 

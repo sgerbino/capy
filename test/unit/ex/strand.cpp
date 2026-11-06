@@ -64,12 +64,12 @@ struct reentrant_executor
     test_io_context& context() const noexcept { return *ctx_; }
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
-    std::coroutine_handle<> dispatch(continuation& c) const
+    std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        post(c);
+        post(std::move(h));
         return std::noop_coroutine();
     }
-    void post(continuation& c) const
+    void post(chain_holder&& h) const
     {
         if(*fails_ > 0)
         {
@@ -78,7 +78,7 @@ struct reentrant_executor
                 std::exchange(*on_fail_, nullptr)();
             throw std::runtime_error("post");
         }
-        q_->push(c);
+        q_->push(*h.release());
     }
 };
 
@@ -487,7 +487,7 @@ struct strand_test
         auto coro_a = make_latched(
             &a_started, a_done, std::chrono::milliseconds(200));
         continuation ca{coro_a.h_};
-        sA.post(ca);
+        sA.post(chain_holder(ca));
         coro_a.h_ = nullptr;
 
         // Wait until A is actively sleeping
@@ -496,7 +496,7 @@ struct strand_test
         auto coro_b = make_latched(
             nullptr, b_done, std::chrono::milliseconds(0));
         continuation cb{coro_b.h_};
-        sB.post(cb);
+        sB.post(chain_holder(cb));
         coro_b.h_ = nullptr;
 
         // B should complete while A is still sleeping
@@ -524,7 +524,7 @@ struct strand_test
             impl_weak = s.impl_;
             auto coro = make_lifetime_coro(done);
             c.h = coro.handle();
-            s.post(c);
+            s.post(chain_holder(c));
             coro.release();
         }   // strand handle dropped here
 
@@ -558,8 +558,8 @@ struct strand_test
             for(int j = 0; j < posts_per_strand; ++j)
             {
                 coros.push_back(make_counter_coro(total));
-                conts.push_back({coros.back().handle()});
-                strands[i].post(conts.back());
+                conts.emplace_back(coros.back().handle());
+                strands[i].post(chain_holder(conts.back()));
                 coros.back().release();
             }
         }
@@ -639,8 +639,8 @@ struct strand_test
         auto coroB = make_busy();
         continuation cA{coroA.handle()};
         continuation cB{coroB.handle()};
-        sA.post(cA);
-        sB.post(cB);
+        sA.post(chain_holder(cA));
+        sB.post(chain_holder(cB));
         coroA.release();
         coroB.release();
 
@@ -670,7 +670,7 @@ struct strand_test
 
         auto coro = make_counter_coro(counter);
         continuation c{coro.handle()};
-        s.post(c);
+        s.post(chain_holder(c));
         coro.release();
 
         BOOST_TEST(wait_for([&]{ return counter.load() >= 1; }));
@@ -687,7 +687,7 @@ struct strand_test
 
         auto coro = make_counter_coro(counter);
         continuation c{coro.handle()};
-        s.dispatch(c);
+        s.dispatch(chain_holder(c));
         coro.release();
 
         BOOST_TEST(wait_for([&]{ return counter.load() >= 1; }));
@@ -711,8 +711,8 @@ struct strand_test
         for(int i = 0; i < N; ++i)
         {
             coros.push_back(make_counter_coro(counter));
-            conts.push_back({coros.back().handle()});
-            s.post(conts.back());
+            conts.emplace_back(coros.back().handle());
+            s.post(chain_holder(conts.back()));
             coros.back().release();
         }
 
@@ -753,8 +753,8 @@ struct strand_test
                     for(int j = 0; j < per_thread; ++j)
                     {
                         my_coros.push_back(make_counter_coro(counter));
-                        my_conts.push_back({my_coros.back().handle()});
-                        s.post(my_conts.back());
+                        my_conts.emplace_back(my_coros.back().handle());
+                        s.post(chain_holder(my_conts.back()));
                         my_coros.back().release();
                     }
                 });
@@ -787,8 +787,8 @@ struct strand_test
         for(int i = 0; i < N; ++i)
         {
             coros.push_back(make_order_coro(log, log_mutex, i));
-            conts.push_back({coros.back().handle()});
-            s.post(conts.back());
+            conts.emplace_back(coros.back().handle());
+            s.post(chain_holder(conts.back()));
             coros.back().release();
         }
 
@@ -891,8 +891,8 @@ struct strand_test
         for(int i = 0; i < N; ++i)
         {
             coros.push_back(make_tracking_coro());
-            conts.push_back({coros.back().handle()});
-            s.post(conts.back());
+            conts.emplace_back(coros.back().handle());
+            s.post(chain_holder(conts.back()));
             coros.back().release();
         }
 
@@ -964,8 +964,8 @@ struct strand_test
             for(int i = 0; i < N; ++i)
             {
                 coros.push_back(make_counter_coro(counter));
-                conts.push_back({coros.back().handle()});
-                s.post(conts.back());
+                conts.emplace_back(coros.back().handle());
+                s.post(chain_holder(conts.back()));
                 coros.back().release();
             }
 
@@ -1013,7 +1013,7 @@ struct strand_test
             BOOST_TEST(slot);
 
             c = slot;
-            s.post(c);
+            s.post(chain_holder(c));
             // The strand's runner is lost; the chain stays queued.
             while(!q.empty())
             {
@@ -1049,10 +1049,10 @@ struct strand_test
         qe.ctx_ = ctx.get();
         strand<queuing_executor> s1{qe};
         strand<queuing_executor> s2{qe};
-        s1.post(conts[0]);
-        s1.post(conts[1]);
-        s2.post(conts[2]);
-        s2.post(conts[3]);
+        s1.post(chain_holder(conts[0]));
+        s1.post(chain_holder(conts[1]));
+        s2.post(chain_holder(conts[2]));
+        s2.post(chain_holder(conts[3]));
         BOOST_TEST_EQ(q.size(), 2u);
         while(!q.empty())
         {
@@ -1087,8 +1087,8 @@ struct strand_test
         queuing_executor qe(q);
         qe.ctx_ = ctx.get();
         auto s = std::make_unique<strand<queuing_executor>>(qe);
-        s->post(conts[0]);
-        s->post(conts[1]);
+        s->post(chain_holder(conts[0]));
+        s->post(chain_holder(conts[1]));
         BOOST_TEST_EQ(q.size(), 1u);
         capy::abandon(q.front());
         q.pop();
@@ -1143,15 +1143,15 @@ struct strand_test
             test_io_context& context() const noexcept { return *ctx_; }
             void on_work_started() const noexcept {}
             void on_work_finished() const noexcept {}
-            std::coroutine_handle<> dispatch(continuation& c) const
+            std::coroutine_handle<> dispatch(chain_holder&& h) const
             {
-                post(c);
+                post(std::move(h));
                 return std::noop_coroutine();
             }
-            void post(continuation& c) const
+            void post(chain_holder&& h) const
             {
                 std::lock_guard<std::mutex> lk(q_->m);
-                q_->v.push_back(c);
+                q_->v.push_back(*h.release());
             }
         };
         auto probe = [](destroy_count_t) -> task<void> { co_return; };
@@ -1170,7 +1170,7 @@ struct strand_test
                 go.fetch_add(1);
                 while(go.load() < 2)
                     std::this_thread::yield();
-                s->post(c);
+                s->post(chain_holder(c));
             });
             go.fetch_add(1);
             while(go.load() < 2)
@@ -1204,16 +1204,16 @@ struct strand_test
             test_io_context& context() const noexcept { return *ctx_; }
             void on_work_started() const noexcept {}
             void on_work_finished() const noexcept {}
-            std::coroutine_handle<> dispatch(continuation& c) const
+            std::coroutine_handle<> dispatch(chain_holder&& h) const
             {
-                post(c);
+                post(std::move(h));
                 return std::noop_coroutine();
             }
-            void post(continuation& c) const
+            void post(chain_holder&& h) const
             {
                 if(*fail_)
                     throw std::runtime_error("post");
-                q_->push(c);
+                q_->push(*h.release());
             }
         };
         std::atomic<int> ran{0};
@@ -1224,12 +1224,15 @@ struct strand_test
         auto s = std::make_unique<strand<throwing_executor>>(
             throwing_executor{&q, ctx.get(), &fail});
         continuation c1{held.handle()};
-        BOOST_TEST_THROWS(s->post(c1), std::runtime_error);
+        chain_holder held_c1(c1);
+        BOOST_TEST_THROWS(s->post(std::move(held_c1)), std::runtime_error);
+        BOOST_TEST(bool(held_c1));
+        held_c1.release();
         fail = false;
         auto next = make_counter_coro(ran);
         continuation c2{next.handle()};
         next.release();
-        s->post(c2);
+        s->post(chain_holder(c2));
         while(!q.empty())
         {
             auto c = q.front();
@@ -1265,8 +1268,11 @@ struct strand_test
             auto ctx = std::make_unique<closable_test_context>();
             auto s = std::make_unique<strand<reentrant_executor>>(
                 reentrant_executor{&q, ctx.get(), &fails, &on_fail});
-            on_fail = [&] { s->post(c2); };
-            BOOST_TEST_THROWS(s->post(c1), std::runtime_error);
+            on_fail = [&] { s->post(chain_holder(c2)); };
+            chain_holder held_c1(c1);
+            BOOST_TEST_THROWS(s->post(std::move(held_c1)), std::runtime_error);
+            BOOST_TEST(bool(held_c1));
+            held_c1.release();
             while(!q.empty())
             {
                 auto c = q.front();
@@ -1313,7 +1319,7 @@ struct strand_test
         bool threw = false;
         try
         {
-            s->post(c);
+            s->post(chain_holder(c));
         }
         catch(std::runtime_error const&)
         {
@@ -1348,10 +1354,13 @@ struct strand_test
                 reentrant_executor{&q, ctx.get(), &fails, &on_fail});
             on_fail = [&]
             {
-                s->post(c2);
+                s->post(chain_holder(c2));
                 on_fail = [&] { ctx->shutdown(); };
             };
-            BOOST_TEST_THROWS(s->post(c1), std::runtime_error);
+            chain_holder held_c1(c1);
+            BOOST_TEST_THROWS(s->post(std::move(held_c1)), std::runtime_error);
+            BOOST_TEST(bool(held_c1));
+            held_c1.release();
             BOOST_TEST_EQ(held_down, 0);
             BOOST_TEST_EQ(behind_down, 1);
             BOOST_TEST(q.empty());
@@ -1379,7 +1388,7 @@ struct strand_test
         strand<queuing_executor> before{qe};
         ctx->shutdown();
         auto after = std::make_unique<strand<queuing_executor>>(qe);
-        after->post(c);
+        after->post(chain_holder(c));
         BOOST_TEST_EQ(down, 1);
         BOOST_TEST(q.empty());
         ctx.reset();
@@ -1402,7 +1411,7 @@ struct strand_test
         qe.ctx_ = ctx.get();
         ctx->shutdown();
         auto s = std::make_unique<strand<queuing_executor>>(qe);
-        s->post(c);
+        s->post(chain_holder(c));
         BOOST_TEST_EQ(down, 1);
         BOOST_TEST(q.empty());
         ctx.reset();
@@ -1433,7 +1442,7 @@ struct strand_test
                 auto t = probe(destroy_count_t(down));
                 c.h = t.handle();
                 t.release();
-                s->post(c);
+                s->post(chain_holder(c));
             }
 
             void shutdown() override {}
@@ -1464,7 +1473,7 @@ struct strand_test
         qe.ctx_ = ctx.get();
         strand<queuing_executor> s{qe};
         ctx->shutdown();
-        s.post(c);
+        s.post(chain_holder(c));
         BOOST_TEST_EQ(down, 1);
         BOOST_TEST(q.empty());
     }
@@ -1485,8 +1494,8 @@ struct strand_test
         tb.release();
         {
             strand<queuing_executor> s{queuing_executor(q)};
-            s.post(ca);
-            s.post(cb);
+            s.post(chain_holder(ca));
+            s.post(chain_holder(cb));
             BOOST_TEST_EQ(q.size(), 1u);
             capy::abandon(q.front());
             q.pop();
@@ -1533,7 +1542,7 @@ struct strand_test
         continuation c{slot_q};
         {
             strand<queuing_executor> s{queuing_executor(q)};
-            s.post(c);
+            s.post(chain_holder(c));
             BOOST_TEST_EQ(q.size(), 1u);
             capy::abandon(q.front());
             q.pop();
@@ -1589,7 +1598,7 @@ struct strand_test
             for(std::size_t i = 0; i < count; ++i)
             {
                 conts[i] = slots[i];
-                s.post(conts[i]);
+                s.post(chain_holder(conts[i]));
             }
             BOOST_TEST_EQ(q.size(), 1u);
             capy::abandon(q.front());

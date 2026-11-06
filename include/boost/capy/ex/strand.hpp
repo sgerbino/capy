@@ -48,8 +48,8 @@ namespace capy {
     This class satisfies the `Executor` concept, providing:
     - `context()` - Returns the underlying execution context
     - `on_work_started()` / `on_work_finished()` - Work tracking
-    - `dispatch(continuation&)` - May run immediately if already executing in this strand
-    - `post(continuation&)` - Always queues for later execution
+    - `dispatch(chain_holder&&)` - May run immediately if already executing in this strand
+    - `post(chain_holder&&)` - Always queues for later execution
 
     @par Preconditions
     A strand holds only a non-owning reference to its inner executor's
@@ -239,8 +239,8 @@ public:
         Guarantees strict FIFO ordering relative to other post() calls.
         Use this instead of dispatch() when ordering matters.
 
-        @param c The continuation to post. The caller retains
-            ownership; the continuation must remain valid until
+        @param h The holder of the coroutine to post. The continuation
+            it refers to must remain valid until
             it is dequeued and resumed.
 
         @par Preconditions
@@ -249,9 +249,11 @@ public:
         undefined behavior.
     */
     void
-    post(continuation& c) const
+    post(chain_holder&& h) const
     {
-        detail::strand_service::post(impl_, executor_ref(ex_), c);
+        h.transfer([this](continuation& c) {
+            detail::strand_service::post(impl_, executor_ref(ex_), c);
+        });
     }
 
     /** Dispatch a continuation through the strand.
@@ -265,8 +267,8 @@ public:
         Callers requiring strict FIFO ordering should use post()
         instead, which always queues the continuation.
 
-        @param c The continuation to dispatch. The caller retains
-            ownership; the continuation must remain valid until
+        @param h The holder of the coroutine to dispatch. The continuation
+            it refers to must remain valid until
             it is dequeued and resumed.
 
         @return A handle for symmetric transfer or `std::noop_coroutine()`.
@@ -277,9 +279,12 @@ public:
         destruction is undefined behavior.
     */
     std::coroutine_handle<>
-    dispatch(continuation& c) const
+    dispatch(chain_holder&& h) const
     {
-        return detail::strand_service::dispatch(impl_, executor_ref(ex_), c);
+        return h.transfer([this](continuation& c) {
+            return detail::strand_service::dispatch(
+                impl_, executor_ref(ex_), c);
+        });
     }
 };
 

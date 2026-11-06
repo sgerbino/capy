@@ -109,14 +109,14 @@ struct worker_executor
     }
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
-    std::coroutine_handle<> dispatch(continuation& c) const
+    std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        w_->push(c);
+        w_->push(*h.release());
         return std::noop_coroutine();
     }
-    void post(continuation& c) const
+    void post(chain_holder&& h) const
     {
-        w_->push(c);
+        w_->push(*h.release());
     }
 };
 

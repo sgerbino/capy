@@ -90,13 +90,13 @@ struct BOOST_CAPY_DECL blocking_executor
         Called from anywhere else, including while the context is
         shutting down, queues the continuation as @ref post does.
 
-        @param c The continuation to execute.
+        @param h The holder of the coroutine to execute.
 
-        @return `c.h` for symmetric transfer, or
+        @return The coroutine's handle for symmetric transfer, or
             `std::noop_coroutine()` if the continuation was queued.
     */
     std::coroutine_handle<>
-    dispatch(continuation& c) const;
+    dispatch(chain_holder&& h) const;
 
     /** Post work for deferred execution.
 
@@ -104,10 +104,10 @@ struct BOOST_CAPY_DECL blocking_executor
         queue. The handle is resumed when the blocking event
         loop processes it.
 
-        @param c The continuation to enqueue.
+        @param h The holder of the coroutine to enqueue.
     */
     void
-    post(continuation& c) const;
+    post(chain_holder&& h) const;
 
 private:
     blocking_context* ctx_;
@@ -203,13 +203,10 @@ public:
 
     /** Enqueue a continuation for processing.
 
-        A copy is queued, so the owner it carries reaches @ref abandon
-        if the context is destroyed first.
-
-        @param c The continuation to enqueue.
+        @param h The holder of the coroutine to enqueue.
     */
     void
-    enqueue(continuation const& c);
+    enqueue(chain_holder&& h);
 };
 
 /** Wrapper that signals completion after invoking the handler.

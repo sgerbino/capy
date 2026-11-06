@@ -13,6 +13,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/chain_holder.hpp>
 #include <coroutine>
 #include <boost/capy/ex/execution_context.hpp>
 #include <cstddef>
@@ -195,6 +196,16 @@ class thread_pool::executor_type
 
     thread_pool* pool_ = nullptr;
 
+    // Raw across the compiled boundary: a holder passed by reference
+    // would cost a reload and test after every call.
+    BOOST_CAPY_DECL
+    std::coroutine_handle<>
+    dispatch_raw(continuation& c) const;
+
+    BOOST_CAPY_DECL
+    void
+    post_raw(continuation& c) const;
+
     explicit
     executor_type(thread_pool& pool) noexcept
         : pool_(&pool)
@@ -249,29 +260,33 @@ public:
     /** Dispatch a continuation for execution.
 
         If the calling thread is a worker of this pool, returns
-        `c.h` for symmetric transfer so the caller can resume the
+        the handle for symmetric transfer so the caller can resume the
         continuation inline. Otherwise, posts the continuation as
         @ref post does and returns `std::noop_coroutine()`. On that
         path, the continuation is not run if the pool stops first,
         and a call that races with @ref thread_pool::stop can go
         either way. See @ref post.
 
-        @param c The continuation to execute. On the post path,
+        @param h The holder of the coroutine to execute. On the post path,
                  must remain at a stable address until resumed or
                  abandoned.
 
-        @return `c.h` when the calling thread is a pool worker;
+        @return The coroutine's handle when the calling thread is a pool worker;
                 `std::noop_coroutine()` otherwise.
 
         @throws std::system_error If this call posts and must start
             the pool's worker threads, and a thread cannot be started.
-            `c` is not queued.
+            `h` keeps the coroutine.
             Threads that did start keep running, and a later call
             starts only the missing ones.
     */
-    BOOST_CAPY_DECL
     std::coroutine_handle<>
-    dispatch(continuation& c) const;
+    dispatch(chain_holder&& h) const
+    {
+        return h.transfer([this](continuation& c) {
+            return dispatch_raw(c);
+        });
+    }
 
     /** Post a continuation to the thread pool.
 
@@ -290,17 +305,21 @@ public:
         The continuation must remain at a stable address until it
         is resumed or abandoned.
 
-        @param c The continuation to execute.
+        @param h The holder of the coroutine to execute.
 
         @throws std::system_error If this call must start the pool's
-            worker threads, and a thread cannot be started. `c` is not
-            queued.
+            worker threads, and a thread cannot be started. `h` keeps
+            the coroutine.
             Threads that did start keep running, and a later call
             starts only the missing ones.
     */
-    BOOST_CAPY_DECL
     void
-    post(continuation& c) const;
+    post(chain_holder&& h) const
+    {
+        h.transfer([this](continuation& c) {
+            post_raw(c);
+        });
+    }
 
     /** Return true if two executors refer to the same thread pool.
 

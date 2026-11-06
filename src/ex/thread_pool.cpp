@@ -9,6 +9,7 @@
 //
 
 #include <boost/capy/ex/thread_pool.hpp>
+#include <boost/capy/ex/ready_queue.hpp>
 #include <boost/capy/continuation.hpp>
 #include <boost/capy/detail/thread_local_ptr.hpp>
 #include <boost/capy/ex/abandon.hpp>
@@ -63,38 +64,7 @@ class thread_pool::impl
     // resume) and post.
     static inline detail::thread_local_ptr<impl const> current_;
 
-    // Intrusive queue of continuations: the next link is stored in
-    // continuation::reserved (typed continuation* round-tripped through
-    // void*). No per-post allocation: the continuation is owned by the caller.
-    continuation* head_ = nullptr;
-    continuation* tail_ = nullptr;
-
-    void push(continuation* c) noexcept
-    {
-        c->reserved = nullptr;
-        if(tail_)
-            tail_->reserved = c;
-        else
-            head_ = c;
-        tail_ = c;
-    }
-
-    continuation* pop() noexcept
-    {
-        if(!head_)
-            return nullptr;
-        continuation* c = head_;
-        head_ = static_cast<continuation*>(head_->reserved);
-        if(!head_)
-            tail_ = nullptr;
-        return c;
-    }
-
-    bool empty() const noexcept
-    {
-        return head_ == nullptr;
-    }
-
+    ready_queue<> queue_;
     std::mutex mutex_;
     std::condition_variable work_cv_;
     std::condition_variable done_cv_;
@@ -116,22 +86,20 @@ public:
     }
 
     // Abandon queued coroutines. Each is taken under the lock, as other
-    // threads may still post, and abandoned outside it, as abandoning
+    // threads may still post, and dropped outside it, as abandoning
     // can post.
     void
     drain_abandoned() noexcept
     {
         for(;;)
         {
-            continuation* c;
+            chain_holder h;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                c = pop();
+                h = queue_.pop();
             }
-            if(!c)
+            if(!h)
                 return;
-            if(c->h && c->h != std::noop_coroutine())
-                capy::abandon(*c);
         }
     }
 
@@ -158,14 +126,14 @@ public:
                 {
                     // Stopped before any thread started: nothing will
                     // run it, and the destructor's drain abandons it.
-                    push(&c);
+                    queue_.push(chain_holder(c));
                     return;
                 }
             }
             ensure_started();
         }
         std::lock_guard<std::mutex> lock(mutex_);
-        push(&c);
+        queue_.push(chain_holder(c));
         // Under the lock so the pool cannot drain, join, and
         // destroy the condition variable mid-signal.
         work_cv_.notify_one();
@@ -278,12 +246,14 @@ private:
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 work_cv_.wait(lock, [this]{
-                    return !empty() ||
+                    return !queue_.empty() ||
                         stop_;
                 });
                 if(stop_)
                     return;
-                c = pop();
+                // Raw, so no holder check runs inside the critical
+                // section.
+                c = queue_.pop().release();
             }
             if(c)
                 safe_resume(c->h);
@@ -356,14 +326,14 @@ on_work_finished() const noexcept
 
 void
 thread_pool::executor_type::
-post(continuation& c) const
+post_raw(continuation& c) const
 {
     pool_->impl_->post(c);
 }
 
 std::coroutine_handle<>
 thread_pool::executor_type::
-dispatch(continuation& c) const
+dispatch_raw(continuation& c) const
 {
     if(pool_->impl_->running_in_this_thread())
         return c.h;

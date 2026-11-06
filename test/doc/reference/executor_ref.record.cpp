@@ -37,7 +37,7 @@ namespace ex_1 {
 void store_executor(capy::executor_ref ex, capy::continuation& my_continuation)
 {
     if(ex)
-        ex.post(my_continuation);
+        ex.post(capy::chain_holder(my_continuation));
 }
 
 void use_thread_pool(capy::thread_pool& ctx, capy::continuation& my_continuation)

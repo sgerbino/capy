@@ -63,7 +63,7 @@ capy::continuation& make_suspended_work(capy::thread_pool& pool)
 // tag::full[]
 void schedule_work(capy::executor_ref ex, capy::continuation& c)
 {
-    ex.post(c);  // Works with any executor
+    ex.post(capy::chain_holder(c));  // Works with any executor
 }
 
 int main()

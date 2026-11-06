@@ -8,7 +8,7 @@
 //
 
 #include "capy_streams.hpp"
-#include "abandon_guard.hpp"
+#include "resume_or_abandon.hpp"
 
 #include <boost/asio/bind_cancellation_slot.hpp>
 #include <boost/asio/cancellation_signal.hpp>
@@ -257,25 +257,29 @@ public:
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(capy::continuation& c) const
+    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
     {
-        post(c);
+        post(std::move(h));
         return std::noop_coroutine();
     }
 
-    void post(capy::continuation& c) const
+    void post(capy::chain_holder&& h) const
     {
-        resume_or_abandon r(c);
+        auto* c = h.release();
+        resume_or_abandon r(*c);
         try
         {
             net::post(ioc_->get_executor(), std::move(r));
         }
         catch(...)
         {
-            // A handler Asio took and then destroyed has given `c` up,
-            // so the post must not also report it as still held.
+            // A handler Asio took and then destroyed has given the
+            // coroutine up, so the post must not report it as still held.
             if(r.release())
+            {
+                h = boost::capy::chain_holder(*c);
                 throw;
+            }
         }
     }
 };

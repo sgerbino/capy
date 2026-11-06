@@ -133,7 +133,7 @@ struct boundary_trampoline
                     {
                         p_->owner_ = nullptr;
                         auto ex = p_->caller_ex_;
-                        ex.post(p_->parent_);
+                        ex.post(chain_holder(p_->parent_));
                     }
                     return detail::symmetric_transfer(
                         std::noop_coroutine());
@@ -331,12 +331,14 @@ struct [[nodiscard]] run_awaitable_ex
         p.set_environment(&env_);
         task_cont_.h = h;
         task_cont_.owner = &tp.segment_;
+        chain_holder held(task_cont_);
         try
         {
-            ex_.post(task_cont_);
+            ex_.post(std::move(held));
         }
         catch(...)
         {
+            held.release();
             // The parent resumes with the exception: nothing may still
             // treat the task as lent or hold work for the parent.
             p.set_continuation(std::noop_coroutine());

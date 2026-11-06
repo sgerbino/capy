@@ -13,6 +13,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
+#include <boost/capy/ex/chain_holder.hpp>
 #include <boost/capy/detail/type_id.hpp>
 #include <concepts>
 #include <coroutine>
@@ -124,12 +125,16 @@ class any_executor
 
         std::coroutine_handle<> dispatch(continuation& c) const override
         {
-            return ex_.dispatch(c);
+            return detail::adopt_chain(c, [this](chain_holder& h) {
+                return ex_.dispatch(std::move(h));
+            });
         }
 
         void post(continuation& c) const override
         {
-            ex_.post(c);
+            detail::adopt_chain(c, [this](chain_holder& h) {
+                ex_.post(std::move(h));
+            });
         }
 
         bool equals(impl_base const* other) const noexcept override
@@ -254,20 +259,22 @@ public:
     /** Dispatches a continuation through the wrapped executor.
 
         Returns a handle for symmetric transfer. If running in the
-        executor's thread, returns `c.h`. Otherwise, posts the
-        continuation for later execution and returns
+        executor's thread, returns the coroutine's handle. Otherwise,
+        posts the coroutine for later execution and returns
         `std::noop_coroutine()`.
 
-        @param c The continuation to dispatch for resumption.
-                 Must remain at a stable address until dequeued.
+        @param h The holder of the coroutine. It owns nothing afterward,
+                 unless the call throws.
 
         @return A handle for symmetric transfer or `std::noop_coroutine()`.
 
         @pre This instance holds a valid executor.
     */
-    std::coroutine_handle<> dispatch(continuation& c) const
+    std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        return p_->dispatch(c);
+        return h.transfer([this](continuation& c) {
+            return p_->dispatch(c);
+        });
     }
 
     /** Posts a continuation to the wrapped executor.
@@ -276,14 +283,16 @@ public:
         and returns. The caller should transfer to `std::noop_coroutine()`
         after calling this.
 
-        @param c The continuation to post for resumption.
-                 Must remain at a stable address until dequeued.
+        @param h The holder of the coroutine. It owns nothing afterward,
+                 unless the call throws.
 
         @pre This instance holds a valid executor.
     */
-    void post(continuation& c) const
+    void post(chain_holder&& h) const
     {
-        p_->post(c);
+        h.transfer([this](continuation& c) {
+            p_->post(c);
+        });
     }
 
     /** Compares two executor wrappers for equality.
