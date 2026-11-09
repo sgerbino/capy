@@ -303,8 +303,10 @@ struct chain_holder_test
         continuation c{std::noop_coroutine()};
         chain_holder h(c);
         BOOST_TEST_THROWS(
-            h.transfer([](continuation&) { throw std::runtime_error("x"); }),
-            std::runtime_error);
+            h.transfer([](continuation&) {
+                throw_test_exception_opaque("x");
+            }),
+            test_exception);
         BOOST_TEST(bool(h));
         BOOST_TEST(h.release() == &c);
     }

@@ -9,6 +9,7 @@
 
 #include <boost/capy/concept/execution_context.hpp>
 #include <boost/capy/ex/await_context.hpp>
+#include <boost/capy/ex/chain_holder.hpp>
 #include <boost/capy/ex/run_async.hpp>
 #include <boost/capy/ex/run.hpp>
 #include <boost/capy/ex/strand.hpp>
@@ -81,14 +82,14 @@ public:
     {
     }
 
-    std::coroutine_handle<> dispatch(continuation& c) const
+    std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        return c.h;
+        return h.take_handle();
     }
 
-    void post(continuation& c) const
+    void post(chain_holder&& h) const
     {
-        c.h.resume();
+        h.resume();
     }
 
     void defer(std::coroutine_handle<> h) const
