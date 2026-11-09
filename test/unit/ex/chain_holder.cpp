@@ -283,34 +283,6 @@ struct chain_holder_test
         chain_holder h(c);
     }
 
-    void testTransferConsumesOnSuccess()
-    {
-        continuation c{std::noop_coroutine()};
-        chain_holder h(c);
-        continuation* seen = nullptr;
-        int const r = h.transfer([&](continuation& x)
-        {
-            seen = &x;
-            return 7;
-        });
-        BOOST_TEST_EQ(r, 7);
-        BOOST_TEST(seen == &c);
-        BOOST_TEST(!h);
-    }
-
-    void testTransferRestoresOnThrow()
-    {
-        continuation c{std::noop_coroutine()};
-        chain_holder h(c);
-        BOOST_TEST_THROWS(
-            h.transfer([](continuation&) {
-                throw_test_exception_opaque("x");
-            }),
-            test_exception);
-        BOOST_TEST(bool(h));
-        BOOST_TEST(h.release() == &c);
-    }
-
     void testFailedPostLeavesTheCaller()
     {
         int down = 0;
@@ -380,8 +352,6 @@ struct chain_holder_test
         testMoveTransfersOwnership();
         testMoveAssignAbandonsTheOld();
         testNoopCoroutineIsSafeToDrop();
-        testTransferConsumesOnSuccess();
-        testTransferRestoresOnThrow();
         testFailedPostLeavesTheCaller();
         testDroppedPostUnwindsTheChain();
     }

@@ -81,13 +81,11 @@ public:
         return new_impl;
     }
 
-    // Returns the service when the caller must post an invoker.
+    // Returns the service when the caller must post an invoker. A shut
+    // down strand leaves `h` with the caller, which abandons it unlocked.
     static strand_service_impl*
-    enqueue(strand_impl& impl, continuation& c)
+    enqueue(strand_impl& impl, chain_holder& h)
     {
-        // Declared before the lock: a shut down strand drops it, and
-        // the abandon must run unlocked.
-        chain_holder h(c);
         // A closed strand never locks: the mutex it borrowed may have
         // gone with its service.
         if(impl.service_.load(std::memory_order_acquire))
@@ -117,17 +115,15 @@ public:
     // Takes back a continuation whose invoker could not be posted.
     // `taken` means a shutdown took it first and abandoned it.
     static withdrawal
-    withdraw(strand_impl& impl, continuation& c) noexcept
+    withdraw(strand_impl& impl, chain_holder& h) noexcept
     {
         std::lock_guard<std::mutex> lock(*impl.mutex_);
         if(!impl.service_.load(std::memory_order_relaxed))
             return withdrawal::taken;
         // Nothing takes from the queue while it waits for an invoker,
-        // so `c` is still first.
-        auto* front = impl.pending_.pop().release();
-        BOOST_CAPY_ASSERT(front == &c);
-        std::ignore = front;
-        std::ignore = c;
+        // so the caller's continuation is still first. `h` is empty,
+        // so the assignment abandons nothing under the lock.
+        h = impl.pending_.pop();
         // Posts queued behind `c` returned trusting its invoker, so
         // the strand stays locked until one runs them.
         if(!impl.pending_.empty())
@@ -338,7 +334,7 @@ strand_service_impl::post_invoker(
     }
 }
 
-// A post that throws leaves the caller holding `c`, unless a
+// A post that throws leaves the caller holding `h`, unless a
 // shutdown already took and abandoned it.
 static
 void
@@ -346,7 +342,7 @@ post_or_withdraw(
     strand_service_impl* svc,
     std::shared_ptr<strand_impl> const& impl,
     executor_ref ex,
-    continuation& c)
+    chain_holder& h)
 {
     try
     {
@@ -355,7 +351,7 @@ post_or_withdraw(
     catch(...)
     {
         using withdrawal = strand_service_impl::withdrawal;
-        auto const w = strand_service_impl::withdraw(*impl, c);
+        auto const w = strand_service_impl::withdraw(*impl, h);
         if(w == withdrawal::taken)
             return;
         if(w == withdrawal::followed)
@@ -405,13 +401,13 @@ strand_service::
 dispatch(
     std::shared_ptr<strand_impl> const& impl,
     executor_ref ex,
-    continuation& c)
+    chain_holder& h)
 {
     if(running_in_this_thread(*impl))
-        return c.h;
+        return h.take_handle();
 
-    if(auto* svc = strand_service_impl::enqueue(*impl, c))
-        post_or_withdraw(svc, impl, ex, c);
+    if(auto* svc = strand_service_impl::enqueue(*impl, h))
+        post_or_withdraw(svc, impl, ex, h);
     return std::noop_coroutine();
 }
 
@@ -420,10 +416,10 @@ strand_service::
 post(
     std::shared_ptr<strand_impl> const& impl,
     executor_ref ex,
-    continuation& c)
+    chain_holder& h)
 {
-    if(auto* svc = strand_service_impl::enqueue(*impl, c))
-        post_or_withdraw(svc, impl, ex, c);
+    if(auto* svc = strand_service_impl::enqueue(*impl, h))
+        post_or_withdraw(svc, impl, ex, h);
 }
 
 strand_service&

@@ -90,8 +90,8 @@ class any_executor
         virtual execution_context& context() const noexcept = 0;
         virtual void on_work_started() const noexcept = 0;
         virtual void on_work_finished() const noexcept = 0;
-        virtual std::coroutine_handle<> dispatch(continuation&) const = 0;
-        virtual void post(continuation&) const = 0;
+        virtual std::coroutine_handle<> dispatch(chain_holder&) const = 0;
+        virtual void post(chain_holder&) const = 0;
         virtual bool equals(impl_base const*) const noexcept = 0;
         virtual detail::type_info const& target_type() const noexcept = 0;
         virtual void const* target_ptr() const noexcept = 0;
@@ -123,18 +123,14 @@ class any_executor
             ex_.on_work_finished();
         }
 
-        std::coroutine_handle<> dispatch(continuation& c) const override
+        std::coroutine_handle<> dispatch(chain_holder& h) const override
         {
-            return detail::adopt_chain(c, [this](chain_holder& h) {
-                return ex_.dispatch(std::move(h));
-            });
+            return ex_.dispatch(std::move(h));
         }
 
-        void post(continuation& c) const override
+        void post(chain_holder& h) const override
         {
-            detail::adopt_chain(c, [this](chain_holder& h) {
-                ex_.post(std::move(h));
-            });
+            ex_.post(std::move(h));
         }
 
         bool equals(impl_base const* other) const noexcept override
@@ -272,9 +268,7 @@ public:
     */
     std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        return h.transfer([this](continuation& c) {
-            return p_->dispatch(c);
-        });
+        return p_->dispatch(h);
     }
 
     /** Posts a continuation to the wrapped executor.
@@ -290,9 +284,7 @@ public:
     */
     void post(chain_holder&& h) const
     {
-        h.transfer([this](continuation& c) {
-            p_->post(c);
-        });
+        p_->post(h);
     }
 
     /** Compares two executor wrappers for equality.

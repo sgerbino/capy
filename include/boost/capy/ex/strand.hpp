@@ -251,9 +251,7 @@ public:
     void
     post(chain_holder&& h) const
     {
-        h.transfer([this](continuation& c) {
-            detail::strand_service::post(impl_, executor_ref(ex_), c);
-        });
+        detail::strand_service::post(impl_, executor_ref(ex_), h);
     }
 
     /** Dispatch a continuation through the strand.
@@ -281,10 +279,8 @@ public:
     std::coroutine_handle<>
     dispatch(chain_holder&& h) const
     {
-        return h.transfer([this](continuation& c) {
-            return detail::strand_service::dispatch(
-                impl_, executor_ref(ex_), c);
-        });
+        return detail::strand_service::dispatch(
+            impl_, executor_ref(ex_), h);
     }
 };
 

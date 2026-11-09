@@ -196,16 +196,6 @@ class thread_pool::executor_type
 
     thread_pool* pool_ = nullptr;
 
-    // Raw across the compiled boundary: a holder passed by reference
-    // would cost a reload and test after every call.
-    BOOST_CAPY_DECL
-    std::coroutine_handle<>
-    dispatch_raw(continuation& c) const;
-
-    BOOST_CAPY_DECL
-    void
-    post_raw(continuation& c) const;
-
     explicit
     executor_type(thread_pool& pool) noexcept
         : pool_(&pool)
@@ -280,13 +270,9 @@ public:
             Threads that did start keep running, and a later call
             starts only the missing ones.
     */
+    BOOST_CAPY_DECL
     std::coroutine_handle<>
-    dispatch(chain_holder&& h) const
-    {
-        return h.transfer([this](continuation& c) {
-            return dispatch_raw(c);
-        });
-    }
+    dispatch(chain_holder&& h) const;
 
     /** Post a continuation to the thread pool.
 
@@ -313,13 +299,9 @@ public:
             Threads that did start keep running, and a later call
             starts only the missing ones.
     */
+    BOOST_CAPY_DECL
     void
-    post(chain_holder&& h) const
-    {
-        h.transfer([this](continuation& c) {
-            post_raw(c);
-        });
-    }
+    post(chain_holder&& h) const;
 
     /** Return true if two executors refer to the same thread pool.
 

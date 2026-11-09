@@ -15,7 +15,6 @@
 #include <boost/capy/ex/frame_allocator.hpp>
 
 #include <coroutine>
-#include <type_traits>
 #include <utility>
 
 namespace boost {
@@ -73,9 +72,17 @@ abandon_chain(continuation& c) noexcept;
     }
     @endcode
 
-    @note A holder stored inside the frame it owns cannot start the
-    unwind, since only the unwind would destroy that frame. Keep owning
-    holders outside the chain they own.
+    Holders pass ownership between pieces of code: every `post` and
+    `dispatch`, erased or not, takes one as `chain_holder&&`, and one
+    that throws has not moved from it, so the caller still owns the
+    coroutine. Storage that the chain itself owns keeps a plain
+    @ref continuation instead, and builds a holder when it hands the
+    coroutine on.
+
+    @note A holder stored inside the frame it owns, or inside an object
+    that frame owns, cannot safely start the unwind: the unwind would
+    destroy the holder's own storage. Store a @ref continuation there,
+    and use @ref take or the constructor at the point of hand-off.
 
     @note Do not let a holder die while a lock is held that the unwind
     may need: abandoning can post, and can run frame destructors at
@@ -229,47 +236,6 @@ public:
     {
         return release()->h;
     }
-
-    /** Pass ownership across a call that takes a raw continuation.
-
-        A holder passed by reference through an opaque call forces the
-        caller to reload and test it afterward. This calls `f` with the
-        raw continuation and clears the holder once `f` returns, so the
-        compiler can see nothing is left to test. If `f` throws, the
-        holder still owns the coroutine, so a failed post leaves the
-        caller holding it.
-
-        @par Preconditions
-        This object owns a coroutine, and does not live in storage that
-        `f` can end. A temporary or a local variable qualifies.
-
-        @par Exception Safety
-        Strong guarantee.
-
-        @param f A callable invoked with the `continuation&`. Unless it
-            throws, it now owns the coroutine.
-
-        @return The result of `f`.
-    */
-    template<class F>
-    decltype(auto)
-    transfer(F&& f)
-    {
-        // No catch: it would stop await_suspend inlining into the
-        // coroutine, which costs more than the transfer itself.
-        using result = decltype(std::forward<F>(f)(*c_));
-        if constexpr(std::is_void_v<result>)
-        {
-            std::forward<F>(f)(*c_);
-            c_ = nullptr;
-        }
-        else
-        {
-            result r = std::forward<F>(f)(*c_);
-            c_ = nullptr;
-            return r;
-        }
-    }
 };
 
 /** Post a suspended coroutine to an executor to be resumed.
@@ -297,28 +263,6 @@ resume_via(Ex const& ex, continuation& c)
 {
     ex.post(chain_holder(c));
 }
-
-namespace detail {
-
-// Receives what chain_holder::transfer sent: `f` gets a holder, and a
-// throw hands the coroutine back to the sender without abandoning it.
-template<class F>
-decltype(auto)
-adopt_chain(continuation& c, F&& f)
-{
-    chain_holder h(c);
-    try
-    {
-        return std::forward<F>(f)(h);
-    }
-    catch(...)
-    {
-        h.release();
-        throw;
-    }
-}
-
-} // namespace detail
 
 } // namespace capy
 } // namespace boost

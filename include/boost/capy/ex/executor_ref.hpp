@@ -33,8 +33,8 @@ struct executor_vtable
     execution_context& (*context)(void const*) noexcept;
     void (*on_work_started)(void const*) noexcept;
     void (*on_work_finished)(void const*) noexcept;
-    void (*post)(void const*, continuation&);
-    std::coroutine_handle<> (*dispatch)(void const*, continuation&);
+    void (*post)(void const*, chain_holder&);
+    std::coroutine_handle<> (*dispatch)(void const*, chain_holder&);
     bool (*equals)(void const*, void const*) noexcept;
     detail::type_info const* type_id;
 };
@@ -55,16 +55,12 @@ inline constexpr executor_vtable vtable_for = {
         const_cast<Ex*>(static_cast<Ex const*>(p))->on_work_finished();
     },
     // post
-    [](void const* p, continuation& c) {
-        detail::adopt_chain(c, [p](chain_holder& h) {
-            static_cast<Ex const*>(p)->post(std::move(h));
-        });
+    [](void const* p, chain_holder& h) {
+        static_cast<Ex const*>(p)->post(std::move(h));
     },
     // dispatch
-    [](void const* p, continuation& c) -> std::coroutine_handle<> {
-        return detail::adopt_chain(c, [p](chain_holder& h) {
-            return static_cast<Ex const*>(p)->dispatch(std::move(h));
-        });
+    [](void const* p, chain_holder& h) -> std::coroutine_handle<> {
+        return static_cast<Ex const*>(p)->dispatch(std::move(h));
     },
     // equals
     [](void const* a, void const* b) noexcept -> bool {
@@ -222,9 +218,7 @@ public:
     */
     std::coroutine_handle<> dispatch(chain_holder&& h) const
     {
-        return h.transfer([this](continuation& c) {
-            return vt_->dispatch(ex_, c);
-        });
+        return vt_->dispatch(ex_, h);
     }
 
     /** Posts a continuation to the wrapped executor.
@@ -240,9 +234,7 @@ public:
     */
     void post(chain_holder&& h) const
     {
-        h.transfer([this](continuation& c) {
-            vt_->post(ex_, c);
-        });
+        vt_->post(ex_, h);
     }
 
     /** Compares two executor references for equality.

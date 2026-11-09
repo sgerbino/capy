@@ -115,8 +115,10 @@ public:
         thread_name_prefix_[n] = '\0';
     }
 
+    // Takes `h` only once the push cannot fail, so a thread that
+    // cannot start leaves it with the caller.
     void
-    post(continuation& c)
+    post(chain_holder& h)
     {
         if(!started_.load(std::memory_order_acquire))
         {
@@ -126,14 +128,14 @@ public:
                 {
                     // Stopped before any thread started: nothing will
                     // run it, and the destructor's drain abandons it.
-                    queue_.push(chain_holder(c));
+                    queue_.push(std::move(h));
                     return;
                 }
             }
             ensure_started();
         }
         std::lock_guard<std::mutex> lock(mutex_);
-        queue_.push(chain_holder(c));
+        queue_.push(std::move(h));
         // Under the lock so the pool cannot drain, join, and
         // destroy the condition variable mid-signal.
         work_cv_.notify_one();
@@ -242,7 +244,7 @@ private:
 
         for(;;)
         {
-            continuation* c = nullptr;
+            chain_holder h;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 work_cv_.wait(lock, [this]{
@@ -251,12 +253,10 @@ private:
                 });
                 if(stop_)
                     return;
-                // Raw, so no holder check runs inside the critical
-                // section.
-                c = queue_.pop().release();
+                h = queue_.pop();
             }
-            if(c)
-                safe_resume(c->h);
+            if(h)
+                h.resume();
         }
     }
 };
@@ -326,18 +326,18 @@ on_work_finished() const noexcept
 
 void
 thread_pool::executor_type::
-post_raw(continuation& c) const
+post(chain_holder&& h) const
 {
-    pool_->impl_->post(c);
+    pool_->impl_->post(h);
 }
 
 std::coroutine_handle<>
 thread_pool::executor_type::
-dispatch_raw(continuation& c) const
+dispatch(chain_holder&& h) const
 {
     if(pool_->impl_->running_in_this_thread())
-        return c.h;
-    pool_->impl_->post(c);
+        return h.take_handle();
+    pool_->impl_->post(h);
     return std::noop_coroutine();
 }
 

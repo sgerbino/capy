@@ -247,7 +247,7 @@ class scheduler_executor
 
         void set_value() && noexcept
         {
-            auto h = self_->c_.h;
+            chain_holder h = std::move(self_->h_);
             delete self_;
             h.resume();
         }
@@ -268,9 +268,8 @@ class scheduler_executor
 
         void refuse() noexcept
         {
-            auto c = self_->c_;
+            std::ignore = chain_holder(std::move(self_->h_));
             delete self_;
-            chain_holder held(c);
         }
     };
 
@@ -282,15 +281,16 @@ class scheduler_executor
             ex::schedule(std::declval<Sched>()),
             std::declval<resume_receiver>()));
 
-        // A copy keeps the owner, which abandon needs.
-        continuation c_;
         op_t op_;
+        // After op_, so a connect that throws leaves `h` with the
+        // caller.
+        chain_holder h_;
 
-        holder(Sched s, continuation const& c)
-            : c_(c)
-            , op_(ex::connect(
+        holder(Sched s, chain_holder& h)
+            : op_(ex::connect(
                 ex::schedule(std::move(s)),
                 resume_receiver{this}))
+            , h_(std::move(h))
         {
         }
     };
@@ -320,11 +320,9 @@ public:
 
     void post(chain_holder&& h) const
     {
-        h.transfer([this](continuation& c) {
-            // the holder frees itself from the receiver on completion
-            auto* p = new holder(sched_, c);
-            ex::start(p->op_);
-        });
+        // the holder frees itself from the receiver on completion
+        auto* p = new holder(sched_, h);
+        ex::start(p->op_);
     }
 
     // A generic scheduler cannot answer "is the current thread
