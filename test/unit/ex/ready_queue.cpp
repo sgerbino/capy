@@ -48,9 +48,9 @@ struct ready_queue_test
         continuation c{std::noop_coroutine()};
         ready_queue<> q;
         BOOST_TEST(q.empty());
-        q.push(chain_holder(a));
-        q.push(chain_holder(b));
-        q.push(chain_holder(c));
+        q.push(coroutine_chain_holder(a));
+        q.push(coroutine_chain_holder(b));
+        q.push(coroutine_chain_holder(c));
         BOOST_TEST(!q.empty());
         BOOST_TEST(q.pop().release() == &a);
         BOOST_TEST(q.pop().release() == &b);
@@ -63,9 +63,9 @@ struct ready_queue_test
     {
         continuation a{std::noop_coroutine()};
         ready_queue<> q;
-        q.push(chain_holder(a));
+        q.push(coroutine_chain_holder(a));
         q.pop().release();
-        q.push(chain_holder(a));
+        q.push(coroutine_chain_holder(a));
         BOOST_TEST(q.pop().release() == &a);
         BOOST_TEST(q.empty());
     }
@@ -74,7 +74,7 @@ struct ready_queue_test
     {
         continuation a{std::noop_coroutine()};
         ready_queue<> q;
-        chain_holder h(a);
+        coroutine_chain_holder h(a);
         q.push(std::move(h));
         BOOST_TEST(!h);
         q.pop().release();
@@ -92,8 +92,8 @@ struct ready_queue_test
         t2.release();
         {
             ready_queue<> q;
-            q.push(chain_holder(c1));
-            q.push(chain_holder(c2));
+            q.push(coroutine_chain_holder(c1));
+            q.push(coroutine_chain_holder(c2));
         }
         BOOST_TEST_EQ(down, 2);
     }
@@ -104,9 +104,9 @@ struct ready_queue_test
         continuation b{std::noop_coroutine()};
         continuation c{std::noop_coroutine()};
         ready_queue<> q1, q2, empty;
-        q1.push(chain_holder(a));
-        q2.push(chain_holder(b));
-        q2.push(chain_holder(c));
+        q1.push(coroutine_chain_holder(a));
+        q2.push(coroutine_chain_holder(b));
+        q2.push(coroutine_chain_holder(c));
         q1.splice(empty);
         q1.splice(q2);
         BOOST_TEST(q2.empty());
@@ -121,7 +121,7 @@ struct ready_queue_test
     {
         continuation a{std::noop_coroutine()};
         ready_queue<> q1;
-        q1.push(chain_holder(a));
+        q1.push(coroutine_chain_holder(a));
         ready_queue<> q2(std::move(q1));
         BOOST_TEST(q1.empty());
         BOOST_TEST(q2.pop().release() == &a);
@@ -133,7 +133,7 @@ struct ready_queue_test
         continuation c{std::noop_coroutine()};
         mixed_queue q;
         q.push(&a);
-        q.push(chain_holder(c));
+        q.push(coroutine_chain_holder(c));
         q.push(&b);
 
         auto e1 = q.pop();
@@ -157,7 +157,7 @@ struct ready_queue_test
         op a(1);
         continuation c{std::noop_coroutine()};
         mixed_queue q1, q2;
-        q1.push(chain_holder(c));
+        q1.push(coroutine_chain_holder(c));
         q2.push(&a);
         q1.splice(q2);
         BOOST_TEST(q2.empty());
@@ -176,7 +176,7 @@ struct ready_queue_test
         {
             mixed_queue q;
             q.push(&a);
-            q.push(chain_holder(c));
+            q.push(coroutine_chain_holder(c));
         }
         BOOST_TEST_EQ(down, 1);
         BOOST_TEST_EQ(a.id, 1);
@@ -190,7 +190,7 @@ struct ready_queue_test
         continuation c{t.handle()};
         t.release();
         mixed_queue q;
-        q.push(chain_holder(c));
+        q.push(coroutine_chain_holder(c));
         {
             auto e = q.pop();
             BOOST_TEST(bool(e));

@@ -562,7 +562,7 @@ public:
         p.task_cont_.owner = &p.owner_;
         // If dispatch throws, the destructor destroys the trampoline
         // and the unstarted task with it.
-        chain_holder held(p.task_cont_);
+        coroutine_chain_holder held(p.task_cont_);
         std::coroutine_handle<> next;
         try
         {

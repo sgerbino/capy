@@ -30,7 +30,7 @@ class ready_queue;
 
     @par Ownership and Lifetime
 
-    A continuation does not own its coroutine. A @ref chain_holder
+    A continuation does not own its coroutine. A @ref coroutine_chain_holder
     does, and refers to the continuation while it does. The object
     lives at the site that embeds it (an I/O awaitable, combinator
     state, or trampoline promise).
@@ -54,7 +54,7 @@ class ready_queue;
     `h.resume()`. The executor's internal locking provides
     the necessary synchronization between these two accesses.
 
-    @see @ref chain_holder, @ref ready_queue, @ref Executor,
+    @see @ref coroutine_chain_holder, @ref ready_queue, @ref Executor,
         @ref executor_ref
 */
 class continuation
@@ -77,9 +77,9 @@ public:
 
         Set from the coroutine's @ref await_context when it is parked or
         queued. A holder that gives the coroutine up passes this
-        continuation to a @ref chain_holder, which unwinds the segment from its
-        owner. Null for a coroutine with no owner, such as an owner's own
-        continuation, which a @ref chain_holder destroys directly.
+        continuation to a @ref coroutine_chain_holder, which unwinds the segment
+        from its owner. Null for a coroutine with no owner, such as an owner's
+        own continuation, which a @ref coroutine_chain_holder destroys directly.
     */
     chain_owner* owner = nullptr;
 

@@ -57,7 +57,7 @@ namespace capy {
 inline void
 give_up(continuation& c) noexcept
 {
-    chain_holder held(c);
+    coroutine_chain_holder held(c);
 }
 
 //----------------------------------------------------------
@@ -116,7 +116,7 @@ struct test_executor
     void on_work_finished() const noexcept {}
 
     std::coroutine_handle<>
-    dispatch(chain_holder&& h) const
+    dispatch(coroutine_chain_holder&& h) const
     {
         if(dispatch_count_)
             ++(*dispatch_count_);
@@ -124,7 +124,7 @@ struct test_executor
     }
 
     void
-    post(chain_holder&& h) const
+    post(coroutine_chain_holder&& h) const
     {
         h.resume();
     }
@@ -287,7 +287,7 @@ struct resume_via_post
 
     void operator()() const noexcept
     {
-        ex.post(chain_holder(cont));
+        ex.post(coroutine_chain_holder(cont));
     }
 };
 
@@ -527,13 +527,13 @@ struct queuing_executor
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         queue_->push(*h.release());
         return std::noop_coroutine();
     }
 
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         queue_->push(*h.release());
     }
@@ -564,12 +564,12 @@ struct closing_executor
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         return h.take_handle();
     }
 
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         if(*closed)
             return;
@@ -602,7 +602,7 @@ struct yield_awaitable
     {
         // Post ourselves back to the queue
         cont_.h = h;
-        env->executor.post(chain_holder(cont_));
+        env->executor.post(coroutine_chain_holder(cont_));
         return std::noop_coroutine();
     }
 

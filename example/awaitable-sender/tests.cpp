@@ -891,7 +891,7 @@ void test_abandoned_task_completes_stopped()
             {pool_ex, {}}, &out, &done});
     ex::start(op);
     WAIT_OR_DIE(parked);
-    capy::chain_holder doomed(held);
+    capy::coroutine_chain_holder doomed(held);
     WAIT_OR_DIE(done);
     CHECK(out.ch == channel::stopped);
 }
@@ -933,7 +933,7 @@ void test_unowned_abandon_completes_stopped()
             {pool_ex, {}}, &out, &done});
     ex::start(op);
     WAIT_OR_DIE(parked);
-    capy::chain_holder doomed(held);
+    capy::coroutine_chain_holder doomed(held);
     WAIT_OR_DIE(done);
     CHECK(out.ch == channel::stopped);
 }
@@ -972,11 +972,11 @@ struct abandoning_executor
     }
     void on_work_started() const noexcept { inner_.on_work_started(); }
     void on_work_finished() const noexcept { inner_.on_work_finished(); }
-    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
+    std::coroutine_handle<> dispatch(capy::coroutine_chain_holder&& h) const
     {
         return h.take_handle();
     }
-    void post(capy::chain_holder&&) const
+    void post(capy::coroutine_chain_holder&&) const
     {
     }
 };

@@ -79,7 +79,8 @@ namespace capy {
     frame freeing the one it awaits. The suspended coroutine at the
     bottom is held by whoever will resume it: an operation, queue or
     primitive. A holder that will never resume it drops its
-    @ref chain_holder, which unwinds the chain's segment from its owner (see
+    @ref coroutine_chain_holder, which unwinds the chain's segment from its
+    owner (see
     @ref chain_owner) rather than destroying the bottom frame.
     Destroying a frame that is still awaited, other than in that
     unwind, calls `std::terminate`.

@@ -93,7 +93,7 @@ public:
     {
         for(;;)
         {
-            chain_holder h;
+            coroutine_chain_holder h;
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 h = queue_.pop();
@@ -118,7 +118,7 @@ public:
     // Takes `h` only once the push cannot fail, so a thread that
     // cannot start leaves it with the caller.
     void
-    post(chain_holder& h)
+    post(coroutine_chain_holder& h)
     {
         if(!started_.load(std::memory_order_acquire))
         {
@@ -244,7 +244,7 @@ private:
 
         for(;;)
         {
-            chain_holder h;
+            coroutine_chain_holder h;
             {
                 std::unique_lock<std::mutex> lock(mutex_);
                 work_cv_.wait(lock, [this]{
@@ -326,14 +326,14 @@ on_work_finished() const noexcept
 
 void
 thread_pool::executor_type::
-post(chain_holder&& h) const
+post(coroutine_chain_holder&& h) const
 {
     pool_->impl_->post(h);
 }
 
 std::coroutine_handle<>
 thread_pool::executor_type::
-dispatch(chain_holder&& h) const
+dispatch(coroutine_chain_holder&& h) const
 {
     if(pool_->impl_->running_in_this_thread())
         return h.take_handle();

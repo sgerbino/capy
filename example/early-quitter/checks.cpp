@@ -49,14 +49,14 @@ struct queue_executor
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
+    std::coroutine_handle<> dispatch(capy::coroutine_chain_holder&& h) const
     {
         post(std::move(h));
         return std::noop_coroutine();
     }
 
     // A closed executor gives up what is posted to it.
-    void post(capy::chain_holder&& h) const
+    void post(capy::coroutine_chain_holder&& h) const
     {
         if(closed && *closed)
             return;

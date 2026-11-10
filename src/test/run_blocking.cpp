@@ -53,7 +53,7 @@ blocking_context::~blocking_context()
     {
         for(;;)
         {
-            chain_holder h;
+            coroutine_chain_holder h;
             {
                 std::lock_guard<std::mutex> lock(impl_->mtx);
                 h = impl_->queue.pop();
@@ -126,7 +126,7 @@ blocking_context::run()
 
     for(;;)
     {
-        chain_holder h;
+        coroutine_chain_holder h;
         {
             std::unique_lock<std::mutex> lock(impl_->mtx);
             impl_->cv.wait(lock, [&] {
@@ -146,7 +146,7 @@ blocking_context::run()
 
 void
 blocking_context::enqueue(
-    chain_holder&& h)
+    coroutine_chain_holder&& h)
 {
     std::lock_guard<std::mutex> lock(impl_->mtx);
     impl_->queue.push(std::move(h));
@@ -180,7 +180,7 @@ blocking_executor::on_work_finished() const noexcept
 
 std::coroutine_handle<>
 blocking_executor::dispatch(
-    chain_holder&& h) const
+    coroutine_chain_holder&& h) const
 {
     if(running_ == ctx_)
         return h.take_handle();
@@ -190,7 +190,7 @@ blocking_executor::dispatch(
 
 void
 blocking_executor::post(
-    chain_holder&& h) const
+    coroutine_chain_holder&& h) const
 {
     ctx_->enqueue(std::move(h));
 }

@@ -280,12 +280,12 @@ struct counting_executor
     }
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         post(std::move(h));
         return std::noop_coroutine();
     }
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         h.release();
         ++*posts;

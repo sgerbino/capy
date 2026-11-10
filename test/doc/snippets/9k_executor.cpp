@@ -46,11 +46,11 @@ class dispatching_executor
         bool running_in_this_thread() const noexcept { return true; }
     } ctx_;
 
-    void post(capy::chain_holder&& h) const { h.release(); }
+    void post(capy::coroutine_chain_holder&& h) const { h.release(); }
 
 public:
     // tag::dispatch_impl[]
-    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
+    std::coroutine_handle<> dispatch(capy::coroutine_chain_holder&& h) const
     {
         if(ctx_.running_in_this_thread())
             return h.take_handle();            // symmetric transfer
@@ -155,7 +155,7 @@ struct context_awaitable_sketch
     {
         // tag::dispatch_at_completion[]
         // Timer fires or I/O completes:
-        ex_.post(capy::chain_holder(cont_));
+        ex_.post(capy::coroutine_chain_holder(cont_));
         // end::dispatch_at_completion[]
     }
 };
@@ -171,8 +171,8 @@ public:
     void on_work_started() const noexcept;
     void on_work_finished() const noexcept;
 
-    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const;
-    void post(capy::chain_holder&& h) const;
+    std::coroutine_handle<> dispatch(capy::coroutine_chain_holder&& h) const;
+    void post(capy::coroutine_chain_holder&& h) const;
 
     bool operator==(my_executor const&) const noexcept;
 };
@@ -186,7 +186,7 @@ struct executor_design_test
     {
         dispatching_executor ex;
         capy::continuation c;
-        BOOST_TEST(ex.dispatch(capy::chain_holder(c)) == std::coroutine_handle<>());
+        BOOST_TEST(ex.dispatch(capy::coroutine_chain_holder(c)) == std::coroutine_handle<>());
     }
 
     void testWorkCountReachesZero()

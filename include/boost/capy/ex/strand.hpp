@@ -48,8 +48,9 @@ namespace capy {
     This class satisfies the `Executor` concept, providing:
     - `context()` - Returns the underlying execution context
     - `on_work_started()` / `on_work_finished()` - Work tracking
-    - `dispatch(chain_holder&&)` - May run immediately if already executing in this strand
-    - `post(chain_holder&&)` - Always queues for later execution
+    - `dispatch(coroutine_chain_holder&&)` - May run immediately if already
+      executing in this strand
+    - `post(coroutine_chain_holder&&)` - Always queues for later execution
 
     @par Preconditions
     A strand holds only a non-owning reference to its inner executor's
@@ -249,7 +250,7 @@ public:
         undefined behavior.
     */
     void
-    post(chain_holder&& h) const
+    post(coroutine_chain_holder&& h) const
     {
         detail::strand_service::post(impl_, executor_ref(ex_), h);
     }
@@ -277,7 +278,7 @@ public:
         destruction is undefined behavior.
     */
     std::coroutine_handle<>
-    dispatch(chain_holder&& h) const
+    dispatch(coroutine_chain_holder&& h) const
     {
         return detail::strand_service::dispatch(
             impl_, executor_ref(ex_), h);

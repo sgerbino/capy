@@ -75,7 +75,7 @@ public:
             h.resume();
     }
 
-    void enqueue(capy::chain_holder&& h)
+    void enqueue(capy::coroutine_chain_holder&& h)
     {
         queue_.push(std::move(h));
     }
@@ -113,7 +113,7 @@ public:
 
     // tag::dispatch[]
     std::coroutine_handle<> dispatch(
-        capy::chain_holder&& h) const
+        capy::coroutine_chain_holder&& h) const
     {
         if (loop_->is_running_on_this_thread())
             return h.take_handle();     // resume inline
@@ -122,7 +122,7 @@ public:
     }
     // end::dispatch[]
 
-    void post(capy::chain_holder&& h) const
+    void post(capy::coroutine_chain_holder&& h) const
     {
         loop_->enqueue(std::move(h));
     }

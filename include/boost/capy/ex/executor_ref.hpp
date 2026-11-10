@@ -14,7 +14,7 @@
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/detail/type_id.hpp>
 #include <boost/capy/continuation.hpp>
-#include <boost/capy/ex/chain_holder.hpp>
+#include <boost/capy/ex/coroutine_chain_holder.hpp>
 #include <concepts>
 #include <coroutine>
 #include <type_traits>
@@ -33,8 +33,8 @@ struct executor_vtable
     execution_context& (*context)(void const*) noexcept;
     void (*on_work_started)(void const*) noexcept;
     void (*on_work_finished)(void const*) noexcept;
-    void (*post)(void const*, chain_holder&);
-    std::coroutine_handle<> (*dispatch)(void const*, chain_holder&);
+    void (*post)(void const*, coroutine_chain_holder&);
+    std::coroutine_handle<> (*dispatch)(void const*, coroutine_chain_holder&);
     bool (*equals)(void const*, void const*) noexcept;
     detail::type_info const* type_id;
 };
@@ -55,11 +55,11 @@ inline constexpr executor_vtable vtable_for = {
         const_cast<Ex*>(static_cast<Ex const*>(p))->on_work_finished();
     },
     // post
-    [](void const* p, chain_holder& h) {
+    [](void const* p, coroutine_chain_holder& h) {
         static_cast<Ex const*>(p)->post(std::move(h));
     },
     // dispatch
-    [](void const* p, chain_holder& h) -> std::coroutine_handle<> {
+    [](void const* p, coroutine_chain_holder& h) -> std::coroutine_handle<> {
         return static_cast<Ex const*>(p)->dispatch(std::move(h));
     },
     // equals
@@ -216,7 +216,7 @@ public:
 
         @pre This instance was constructed with a valid executor.
     */
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         return vt_->dispatch(ex_, h);
     }
@@ -232,7 +232,7 @@ public:
 
         @pre This instance was constructed with a valid executor.
     */
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         vt_->post(ex_, h);
     }

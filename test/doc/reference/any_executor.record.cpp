@@ -44,7 +44,7 @@ void dispatch_via_context(capy::thread_pool& ctx, capy::continuation& c)
         // dispatch() may hand the continuation straight back for
         // symmetric transfer instead of enqueuing it, so the returned
         // handle must be resumed or the continuation is dropped.
-        exec.dispatch(capy::chain_holder(c)).resume();
+        exec.dispatch(capy::coroutine_chain_holder(c)).resume();
     }
 }
 // end::example[]

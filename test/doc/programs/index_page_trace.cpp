@@ -71,7 +71,7 @@ public:
                 auto c = queue_.front();
                 queue_.pop();
                 any = true;
-                capy::chain_holder doomed(c);
+                capy::coroutine_chain_holder doomed(c);
             }
             return any;
         };
@@ -132,14 +132,14 @@ public:
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
+    std::coroutine_handle<> dispatch(capy::coroutine_chain_holder&& h) const
     {
         step("executor: dispatch");
         loop_->enqueue(*h.release());
         return std::noop_coroutine();
     }
 
-    void post(capy::chain_holder&& h) const
+    void post(capy::coroutine_chain_holder&& h) const
     {
         step("executor: post");
         loop_->enqueue(*h.release());
@@ -179,7 +179,7 @@ struct read_awaitable
         backend.push([this] {
             step("I/O backend: the operation completes");
             bytes_ = 5;
-            ex_.post(capy::chain_holder(cont_));  // never cont_.h.resume()
+            ex_.post(capy::coroutine_chain_holder(cont_));  // never cont_.h.resume()
         });
         step("I/O awaitable: suspend");
         return std::noop_coroutine();

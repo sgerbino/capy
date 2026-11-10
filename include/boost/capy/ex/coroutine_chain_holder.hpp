@@ -7,8 +7,8 @@
 // Official repository: https://github.com/cppalliance/capy
 //
 
-#ifndef BOOST_CAPY_EX_CHAIN_HOLDER_HPP
-#define BOOST_CAPY_EX_CHAIN_HOLDER_HPP
+#ifndef BOOST_CAPY_EX_COROUTINE_CHAIN_HOLDER_HPP
+#define BOOST_CAPY_EX_COROUTINE_CHAIN_HOLDER_HPP
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
@@ -23,7 +23,7 @@ namespace capy {
 namespace detail {
 
 // Unwinds the coroutine's segment from its owner, or destroys a coroutine
-// with no owner. Reached only through a chain_holder's destructor.
+// with no owner. Reached only through a coroutine_chain_holder's destructor.
 BOOST_CAPY_DECL
 void
 abandon_chain(continuation& c) noexcept;
@@ -35,7 +35,7 @@ abandon_chain(continuation& c) noexcept;
     A suspended coroutine has exactly one holder, the code that will
     eventually resume it. An executor that drops work without resuming
     it would otherwise leak the whole chain with no report. This type
-    makes the correct outcome the default: destroying a `chain_holder`
+    makes the correct outcome the default: destroying a `coroutine_chain_holder`
     that still owns a coroutine gives the coroutine up for good.
 
     Giving up unwinds the coroutine's segment from its owner: on the
@@ -57,7 +57,7 @@ abandon_chain(continuation& c) noexcept;
 
     @par Example
     @code
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         std::lock_guard lock(ctx_->mutex);
         if(ctx_->closed)
@@ -67,13 +67,13 @@ abandon_chain(continuation& c) noexcept;
 
     void run_one()
     {
-        if(chain_holder h = ctx_->queue.pop())
+        if(coroutine_chain_holder h = ctx_->queue.pop())
             h.resume();
     }
     @endcode
 
     Holders pass ownership between pieces of code: every `post` and
-    `dispatch`, erased or not, takes one as `chain_holder&&`, and one
+    `dispatch`, erased or not, takes one as `coroutine_chain_holder&&`, and one
     that throws has not moved from it, so the caller still owns the
     coroutine. Storage that the chain itself owns keeps a plain
     @ref continuation instead, and builds a holder when it hands the
@@ -100,7 +100,7 @@ abandon_chain(continuation& c) noexcept;
 
     @see ready_queue
 */
-class chain_holder
+class coroutine_chain_holder
 {
     continuation* c_ = nullptr;
 
@@ -109,14 +109,14 @@ public:
 
         Gives up the coroutine if this object still owns one.
     */
-    ~chain_holder()
+    ~coroutine_chain_holder()
     {
         if(c_)
             detail::abandon_chain(*c_);
     }
 
     /// Construct a holder that owns nothing.
-    chain_holder() = default;
+    coroutine_chain_holder() = default;
 
     /** Construct a holder that takes ownership of a suspended coroutine.
 
@@ -126,7 +126,7 @@ public:
 
         @param c The continuation of the coroutine.
     */
-    explicit chain_holder(continuation& c) noexcept
+    explicit coroutine_chain_holder(continuation& c) noexcept
         : c_(&c)
     {
     }
@@ -135,13 +135,13 @@ public:
 
         @param other The holder to take from; it owns nothing afterward.
     */
-    chain_holder(chain_holder&& other) noexcept
+    coroutine_chain_holder(coroutine_chain_holder&& other) noexcept
         : c_(std::exchange(other.c_, nullptr))
     {
     }
 
-    chain_holder(chain_holder const&) = delete;
-    chain_holder& operator=(chain_holder const&) = delete;
+    coroutine_chain_holder(coroutine_chain_holder const&) = delete;
+    coroutine_chain_holder& operator=(coroutine_chain_holder const&) = delete;
 
     /** Take ownership from another holder.
 
@@ -151,10 +151,10 @@ public:
 
         @return `*this`.
     */
-    chain_holder& operator=(chain_holder&& other) noexcept
+    coroutine_chain_holder& operator=(coroutine_chain_holder&& other) noexcept
     {
         // The abandon can run frame destructors, so finish first.
-        chain_holder doomed(std::move(*this));
+        coroutine_chain_holder doomed(std::move(*this));
         c_ = std::exchange(other.c_, nullptr);
         return *this;
     }
@@ -175,9 +175,9 @@ public:
 
         @return A holder of what `c` referred to.
     */
-    static chain_holder take(continuation*& c) noexcept
+    static coroutine_chain_holder take(continuation*& c) noexcept
     {
-        chain_holder h;
+        coroutine_chain_holder h;
         h.c_ = std::exchange(c, nullptr);
         return h;
     }
@@ -242,10 +242,10 @@ public:
 
     Awaitables finish this way: the caller holds the coroutine named by
     `c`, and hands it to the executor it must run on. Prefer this to
-    building a @ref chain_holder at the call.
+    building a @ref coroutine_chain_holder at the call.
 
     @par Preconditions
-    As for the @ref chain_holder constructor.
+    As for the @ref coroutine_chain_holder constructor.
 
     @par Exception Safety
     If the post throws, the coroutine has been given up by the time the
@@ -261,7 +261,7 @@ template<class Ex>
 void
 resume_via(Ex const& ex, continuation& c)
 {
-    ex.post(chain_holder(c));
+    ex.post(coroutine_chain_holder(c));
 }
 
 } // namespace capy

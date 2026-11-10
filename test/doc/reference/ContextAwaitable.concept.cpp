@@ -58,7 +58,7 @@ public:
         auto completion = [this](std::error_code ec) noexcept
         {
             ec_ = ec;                     // publish result; touch *this
-            env_->executor.post(capy::chain_holder(cont_));   // only before post, never after
+            env_->executor.post(capy::coroutine_chain_holder(cont_));   // only before post, never after
         };
 
         start_my_io_op(env_->stop_token, completion);

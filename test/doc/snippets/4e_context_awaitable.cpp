@@ -154,7 +154,7 @@ private:
         // Resume the caller on its executor. post() takes the
         // continuation by reference and queues it; never resume inline
         // from a completion callback (it may run on the wrong thread).
-        env_->executor.post(capy::chain_holder(cont_));
+        env_->executor.post(capy::coroutine_chain_holder(cont_));
     }
 };
 // end::my_awaitable[]
@@ -181,7 +181,7 @@ struct add_awaitable
         env_ = env;
         cont_.h = h;
         result_ = a_ + b_;             // the operation produced a value
-        env_->executor.post(capy::chain_holder(cont_));    // resume the caller on its executor
+        env_->executor.post(capy::coroutine_chain_holder(cont_));    // resume the caller on its executor
         return std::noop_coroutine();
     }
 
@@ -260,7 +260,7 @@ struct foreign_bridge
         // the same-executor invariant.
         start_foreign_op([this]() noexcept {
             store_result();
-            env_->executor.post(capy::chain_holder(cont_));
+            env_->executor.post(capy::coroutine_chain_holder(cont_));
         });
 
         return std::noop_coroutine();

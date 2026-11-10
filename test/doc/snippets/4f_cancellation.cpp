@@ -194,7 +194,7 @@ struct racy_read
         void operator()() const noexcept
         {
             self->canceled_ = true;
-            self->ex_.post(capy::chain_holder(self->cont_));  // even if the read completed
+            self->ex_.post(capy::coroutine_chain_holder(self->cont_));  // even if the read completed
         }
     };
 
@@ -219,7 +219,7 @@ struct racy_read
     // Called by the I/O backend, on any thread, when the read finishes.
     void on_complete() noexcept
     {
-        ex_.post(capy::chain_holder(cont_));  // even if the stop callback posted already
+        ex_.post(capy::coroutine_chain_holder(cont_));  // even if the stop callback posted already
     }
 
     void await_resume() noexcept { stop_cb_.reset(); }
@@ -297,7 +297,7 @@ struct read_op::awaiter
     void arrive() noexcept
     {
         if (arrivals_.fetch_add(1, std::memory_order_acq_rel) == 1)
-            ex_.post(capy::chain_holder(cont_));  // last action: *this can be destroyed now
+            ex_.post(capy::coroutine_chain_holder(cont_));  // last action: *this can be destroyed now
     }
 
     bool await_ready() const noexcept { return false; }

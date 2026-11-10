@@ -649,12 +649,12 @@ struct run_test
         }
         void on_work_started() const noexcept { ++*work_; }
         void on_work_finished() const noexcept { --*work_; }
-        std::coroutine_handle<> dispatch(chain_holder&& h) const
+        std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
         {
             q_->push(*h.release());
             return std::noop_coroutine();
         }
-        void post(chain_holder&& h) const
+        void post(coroutine_chain_holder&& h) const
         {
             q_->push(*h.release());
         }
@@ -858,12 +858,12 @@ struct run_test
             }
             void on_work_started() const noexcept {}
             void on_work_finished() const noexcept {}
-            std::coroutine_handle<> dispatch(chain_holder&& h) const
+            std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
             {
                 post(std::move(h));
                 return std::noop_coroutine();
             }
-            void post(chain_holder&& h) const
+            void post(coroutine_chain_holder&& h) const
             {
                 if(*closed_)
                     return;
@@ -1036,11 +1036,11 @@ struct run_test
         }
         void on_work_started() const noexcept {}
         void on_work_finished() const noexcept {}
-        std::coroutine_handle<> dispatch(chain_holder&&) const
+        std::coroutine_handle<> dispatch(coroutine_chain_holder&&) const
         {
             throw std::runtime_error("dispatch");
         }
-        void post(chain_holder&&) const
+        void post(coroutine_chain_holder&&) const
         {
             throw std::runtime_error("post");
         }

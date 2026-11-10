@@ -247,7 +247,7 @@ class scheduler_executor
 
         void set_value() && noexcept
         {
-            chain_holder h = std::move(self_->h_);
+            coroutine_chain_holder h = std::move(self_->h_);
             delete self_;
             h.resume();
         }
@@ -268,7 +268,7 @@ class scheduler_executor
 
         void refuse() noexcept
         {
-            std::ignore = chain_holder(std::move(self_->h_));
+            std::ignore = coroutine_chain_holder(std::move(self_->h_));
             delete self_;
         }
     };
@@ -284,9 +284,9 @@ class scheduler_executor
         op_t op_;
         // After op_, so a connect that throws leaves `h` with the
         // caller.
-        chain_holder h_;
+        coroutine_chain_holder h_;
 
-        holder(Sched s, chain_holder& h)
+        holder(Sched s, coroutine_chain_holder& h)
             : op_(ex::connect(
                 ex::schedule(std::move(s)),
                 resume_receiver{this}))
@@ -318,7 +318,7 @@ public:
         return sched_ == other.sched_;
     }
 
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         // the holder frees itself from the receiver on completion
         auto* p = new holder(sched_, h);
@@ -327,7 +327,7 @@ public:
 
     // A generic scheduler cannot answer "is the current thread
     // yours", so dispatch degrades to post.
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         post(std::move(h));
         return std::noop_coroutine();

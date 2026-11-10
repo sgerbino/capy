@@ -163,7 +163,7 @@ struct late_poster : execution_context::service
 
     void shutdown() override
     {
-        ex_.post(chain_holder(*c_));
+        ex_.post(coroutine_chain_holder(*c_));
     }
 };
 
@@ -184,7 +184,7 @@ struct dtor_poster : execution_context::service
 
     ~dtor_poster()
     {
-        ex_.post(chain_holder(*c_));
+        ex_.post(coroutine_chain_holder(*c_));
     }
 
     void shutdown() override {}
@@ -211,7 +211,7 @@ struct shutdown_poster : execution_context::service
         std::thread t([this]
         {
             for(auto& c : *cs_)
-                ex_.post(chain_holder(c));
+                ex_.post(coroutine_chain_holder(c));
         });
         t.join();
     }
@@ -387,7 +387,7 @@ struct thread_pool_test
         auto ex = pool.get_executor();
 
         // Post a noop coroutine and verify no exceptions
-        ex.post(chain_holder(c));
+        ex.post(coroutine_chain_holder(c));
 
         // Basic test: pool constructs and destructs without issue
         (void)ex;
@@ -418,7 +418,7 @@ struct thread_pool_test
         {
             thread_pool pool(1);
             auto ex = pool.get_executor();
-            returned = ex.dispatch(chain_holder(*target));
+            returned = ex.dispatch(coroutine_chain_holder(*target));
         }
 
         BOOST_TEST(returned != probe_h);
@@ -448,7 +448,7 @@ struct thread_pool_test
             auto ex = pool.get_executor();
 
             run_async(ex, [&]{
-                returned = ex.dispatch(chain_holder(*target));
+                returned = ex.dispatch(coroutine_chain_holder(*target));
                 done.store(true);
             })(void_task());
 
@@ -487,7 +487,7 @@ struct thread_pool_test
             auto ex_b = pool_b.get_executor();
 
             run_async(ex_a, [&]{
-                returned = ex_b.dispatch(chain_holder(*target));
+                returned = ex_b.dispatch(coroutine_chain_holder(*target));
                 done.store(true);
             })(void_task());
 
@@ -563,7 +563,7 @@ struct thread_pool_test
                 // Multiple threads posting concurrently
                 for(int j = 0; j < posts_per_thread; ++j)
                 {
-                    ex.post(chain_holder(conts[j]));
+                    ex.post(coroutine_chain_holder(conts[j]));
                     ++post_count;
                 }
             });
@@ -609,7 +609,7 @@ struct thread_pool_test
             auto nc = check_thread_name(result, "capy-pool-");
             continuation c{nc.h};
             thread_pool pool(1);
-            pool.get_executor().post(chain_holder(c));
+            pool.get_executor().post(coroutine_chain_holder(c));
 
             BOOST_TEST(wait_for([&]{ return result.done.load(); }));
             BOOST_TEST(result.matches.load());
@@ -621,7 +621,7 @@ struct thread_pool_test
             auto nc = check_thread_name(result, "mypool-");
             continuation c{nc.h};
             thread_pool pool(1, "mypool-");
-            pool.get_executor().post(chain_holder(c));
+            pool.get_executor().post(coroutine_chain_holder(c));
 
             BOOST_TEST(wait_for([&]{ return result.done.load(); }));
             BOOST_TEST(result.matches.load());
@@ -633,7 +633,7 @@ struct thread_pool_test
             auto nc = check_thread_name(result, "idx-0");
             continuation c{nc.h};
             thread_pool pool(1, "idx-");
-            pool.get_executor().post(chain_holder(c));
+            pool.get_executor().post(coroutine_chain_holder(c));
 
             BOOST_TEST(wait_for([&]{ return result.done.load(); }));
             BOOST_TEST(result.matches.load());
@@ -752,7 +752,7 @@ struct thread_pool_test
             for(int i = 0; i < 50; ++i)
             {
                 conts[i].h = std::noop_coroutine();
-                ex.post(chain_holder(conts[i]));
+                ex.post(coroutine_chain_holder(conts[i]));
             }
 
             // Release worker, then pool destructs immediately.
@@ -922,7 +922,7 @@ struct thread_pool_test
                 while(!go.load())
                 {
                 }
-                pool.get_executor().post(chain_holder(c));
+                pool.get_executor().post(coroutine_chain_holder(c));
             });
             go.store(true);
             pool.join();

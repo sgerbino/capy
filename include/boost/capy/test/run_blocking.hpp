@@ -96,7 +96,7 @@ struct BOOST_CAPY_DECL blocking_executor
             `std::noop_coroutine()` if the continuation was queued.
     */
     std::coroutine_handle<>
-    dispatch(chain_holder&& h) const;
+    dispatch(coroutine_chain_holder&& h) const;
 
     /** Post work for deferred execution.
 
@@ -107,7 +107,7 @@ struct BOOST_CAPY_DECL blocking_executor
         @param h The holder of the coroutine to enqueue.
     */
     void
-    post(chain_holder&& h) const;
+    post(coroutine_chain_holder&& h) const;
 
 private:
     blocking_context* ctx_;
@@ -206,7 +206,7 @@ public:
         @param h The holder of the coroutine to enqueue.
     */
     void
-    enqueue(chain_holder&& h);
+    enqueue(coroutine_chain_holder&& h);
 };
 
 /** Wrapper that signals completion after invoking the handler.

@@ -12,7 +12,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
-#include <boost/capy/ex/chain_holder.hpp>
+#include <boost/capy/ex/coroutine_chain_holder.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
 
 #include <atomic>
@@ -31,7 +31,7 @@ namespace capy {
     the segment reaches the owner through its @ref await_context.
 
     When the holder of a suspended coroutine in the segment gives it up
-    by dropping its @ref chain_holder, the owner posts its own
+    by dropping its @ref coroutine_chain_holder, the owner posts its own
     continuation to its executor. There it unwinds the segment from the top: it destroys
     the frame it awaits, which destroys the frames below it in turn, and
     finishes without delivering a result. An executor that destroys the

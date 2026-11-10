@@ -91,7 +91,7 @@ struct boundary_trampoline
         {
             destroy_inner_(awaitable_);
             owner_ = nullptr;
-            std::ignore = chain_holder(parent_);
+            std::ignore = coroutine_chain_holder(parent_);
         }
 
         ~promise_type()
@@ -331,7 +331,7 @@ struct [[nodiscard]] run_awaitable_ex
         p.set_environment(&env_);
         task_cont_.h = h;
         task_cont_.owner = &tp.segment_;
-        chain_holder held(task_cont_);
+        coroutine_chain_holder held(task_cont_);
         try
         {
             ex_.post(std::move(held));

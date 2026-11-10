@@ -69,7 +69,7 @@ struct posts_on_destroy
     ~posts_on_destroy()
     {
         if(c)
-            ex.post(chain_holder(*c));
+            ex.post(coroutine_chain_holder(*c));
     }
 };
 
@@ -99,7 +99,7 @@ struct dtor_poster : execution_context::service
 
     ~dtor_poster()
     {
-        ex_.post(chain_holder(*c_));
+        ex_.post(coroutine_chain_holder(*c_));
     }
 
     void shutdown() override {}
@@ -126,7 +126,7 @@ struct shutdown_poster : execution_context::service
         std::thread t([this]
         {
             for(auto& c : *cs_)
-                ex_.post(chain_holder(c));
+                ex_.post(coroutine_chain_holder(c));
         });
         t.join();
     }
@@ -149,7 +149,7 @@ struct shutdown_dispatcher : execution_context::service
 
     void shutdown() override
     {
-        safe_resume(ex_.dispatch(chain_holder(*c_)));
+        safe_resume(ex_.dispatch(coroutine_chain_holder(*c_)));
     }
 };
 
@@ -168,7 +168,7 @@ struct late_poster : execution_context::service
 
     void shutdown() override
     {
-        ex_.post(chain_holder(*c_));
+        ex_.post(coroutine_chain_holder(*c_));
     }
 };
 
@@ -501,7 +501,7 @@ struct run_blocking_test
         continuation c{h};
         {
             blocking_context ctx;
-            ctx.get_executor().post(chain_holder(c));
+            ctx.get_executor().post(coroutine_chain_holder(c));
         }
         BOOST_TEST_EQ(down, 1);
     }
@@ -642,7 +642,7 @@ struct run_blocking_test
                 destroy_count_t(down), posts_on_destroy(ex, &c2));
             c1.h = t1.handle();
             t1.release();
-            s->post(chain_holder(c1));
+            s->post(coroutine_chain_holder(c1));
         }
         s.reset();
         BOOST_TEST_EQ(down, 1);

@@ -13,7 +13,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
-#include <boost/capy/ex/chain_holder.hpp>
+#include <boost/capy/ex/coroutine_chain_holder.hpp>
 #include <coroutine>
 #include <boost/capy/ex/execution_context.hpp>
 #include <cstddef>
@@ -272,7 +272,7 @@ public:
     */
     BOOST_CAPY_DECL
     std::coroutine_handle<>
-    dispatch(chain_holder&& h) const;
+    dispatch(coroutine_chain_holder&& h) const;
 
     /** Post a continuation to the thread pool.
 
@@ -301,7 +301,7 @@ public:
     */
     BOOST_CAPY_DECL
     void
-    post(chain_holder&& h) const;
+    post(coroutine_chain_holder&& h) const;
 
     /** Return true if two executors refer to the same thread pool.
 

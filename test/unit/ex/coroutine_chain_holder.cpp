@@ -8,7 +8,7 @@
 //
 
 // Test that header file is self-contained.
-#include <boost/capy/ex/chain_holder.hpp>
+#include <boost/capy/ex/coroutine_chain_holder.hpp>
 
 #include <boost/capy/ex/any_executor.hpp>
 #include <boost/capy/ex/executor_ref.hpp>
@@ -29,11 +29,11 @@
 namespace boost {
 namespace capy {
 
-static_assert(sizeof(chain_holder) == sizeof(void*));
-static_assert(!std::is_copy_constructible_v<chain_holder>);
-static_assert(!std::is_copy_assignable_v<chain_holder>);
-static_assert(std::is_nothrow_move_constructible_v<chain_holder>);
-static_assert(std::is_nothrow_move_assignable_v<chain_holder>);
+static_assert(sizeof(coroutine_chain_holder) == sizeof(void*));
+static_assert(!std::is_copy_constructible_v<coroutine_chain_holder>);
+static_assert(!std::is_copy_assignable_v<coroutine_chain_holder>);
+static_assert(std::is_nothrow_move_constructible_v<coroutine_chain_holder>);
+static_assert(std::is_nothrow_move_assignable_v<coroutine_chain_holder>);
 
 namespace {
 
@@ -54,12 +54,12 @@ struct dropping_executor
     }
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         post(std::move(h));
         return std::noop_coroutine();
     }
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         if(*closed)
             return;
@@ -81,11 +81,11 @@ struct throwing_executor
     }
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
-    std::coroutine_handle<> dispatch(chain_holder&&) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&&) const
     {
         throw std::runtime_error("dispatch");
     }
-    void post(chain_holder&&) const
+    void post(coroutine_chain_holder&&) const
     {
         throw std::runtime_error("post");
     }
@@ -113,11 +113,11 @@ struct one_shot
 
 } // namespace
 
-struct chain_holder_test
+struct coroutine_chain_holder_test
 {
     void testEmpty()
     {
-        chain_holder h;
+        coroutine_chain_holder h;
         BOOST_TEST(!h);
         BOOST_TEST(h.release() == nullptr);
     }
@@ -130,7 +130,7 @@ struct chain_holder_test
         continuation c{t.handle()};
         t.release();
         {
-            chain_holder h(c);
+            coroutine_chain_holder h(c);
             BOOST_TEST(bool(h));
         }
         BOOST_TEST_EQ(down, 1);
@@ -144,7 +144,7 @@ struct chain_holder_test
             auto t = probe(destroy_count_t(down));
             continuation c{t.handle()};
             {
-                chain_holder h(c);
+                coroutine_chain_holder h(c);
                 BOOST_TEST(h.release() == &c);
             }
             BOOST_TEST_EQ(down, 0);
@@ -161,7 +161,7 @@ struct chain_holder_test
             co_return;
         };
         continuation c{body(&ran).h};
-        chain_holder h(c);
+        coroutine_chain_holder h(c);
         h.resume();
         BOOST_TEST_EQ(ran, 1);
         BOOST_TEST(!h);
@@ -177,7 +177,7 @@ struct chain_holder_test
         auto* const before = get_current_frame_allocator();
         set_current_frame_allocator(std::pmr::new_delete_resource());
         continuation c{body().h};
-        chain_holder(c).resume();
+        coroutine_chain_holder(c).resume();
         BOOST_TEST(
             get_current_frame_allocator() == std::pmr::new_delete_resource());
         set_current_frame_allocator(before);
@@ -191,7 +191,7 @@ struct chain_holder_test
             auto t = probe(destroy_count_t(down));
             continuation c{t.handle()};
             {
-                chain_holder h(c);
+                coroutine_chain_holder h(c);
                 BOOST_TEST(h.take_handle() == t.handle());
                 BOOST_TEST(!h);
             }
@@ -205,8 +205,8 @@ struct chain_holder_test
     {
         continuation c{std::noop_coroutine()};
         continuation* field = &c;
-        auto first = chain_holder::take(field);
-        auto second = chain_holder::take(field);
+        auto first = coroutine_chain_holder::take(field);
+        auto second = coroutine_chain_holder::take(field);
         BOOST_TEST(field == nullptr);
         BOOST_TEST(!second);
         BOOST_TEST(first.release() == &c);
@@ -247,9 +247,9 @@ struct chain_holder_test
         auto t = probe(destroy_count_t(down));
         continuation c{t.handle()};
         t.release();
-        chain_holder a(c);
+        coroutine_chain_holder a(c);
         {
-            chain_holder b(std::move(a));
+            coroutine_chain_holder b(std::move(a));
             BOOST_TEST(!a);
             BOOST_TEST(bool(b));
             BOOST_TEST_EQ(down, 0);
@@ -268,8 +268,8 @@ struct chain_holder_test
         ta.release();
         tb.release();
         {
-            chain_holder a(ca);
-            chain_holder b(cb);
+            coroutine_chain_holder a(ca);
+            coroutine_chain_holder b(cb);
             a = std::move(b);
             BOOST_TEST_EQ(a_down, 1);
             BOOST_TEST_EQ(b_down, 0);
@@ -280,7 +280,7 @@ struct chain_holder_test
     void testNoopCoroutineIsSafeToDrop()
     {
         continuation c{std::noop_coroutine()};
-        chain_holder h(c);
+        coroutine_chain_holder h(c);
     }
 
     void testFailedPostLeavesTheCaller()
@@ -294,7 +294,7 @@ struct chain_holder_test
             executor_ref ref(raw);
             any_executor any(raw);
 
-            chain_holder h(c);
+            coroutine_chain_holder h(c);
             BOOST_TEST_THROWS(raw.post(std::move(h)), std::runtime_error);
             BOOST_TEST(bool(h));
             BOOST_TEST_THROWS(ref.post(std::move(h)), std::runtime_error);
@@ -333,7 +333,7 @@ struct chain_holder_test
         BOOST_TEST(bool(slot));
 
         closed = true;
-        executor_ref(ex).post(chain_holder(slot));
+        executor_ref(ex).post(coroutine_chain_holder(slot));
         BOOST_TEST_EQ(child_down, 1);
         BOOST_TEST_EQ(parent_down, 1);
     }
@@ -358,8 +358,8 @@ struct chain_holder_test
 };
 
 TEST_SUITE(
-    chain_holder_test,
-    "boost.capy.chain_holder");
+    coroutine_chain_holder_test,
+    "boost.capy.coroutine_chain_holder");
 
 } // namespace capy
 } // namespace boost

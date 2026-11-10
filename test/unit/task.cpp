@@ -84,7 +84,7 @@ struct tracking_executor
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         ++(*dispatch_count_);
         if (dispatch_log)
@@ -92,7 +92,7 @@ struct tracking_executor
         return h.take_handle();
     }
 
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         h.resume();
     }

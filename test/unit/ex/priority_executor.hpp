@@ -117,13 +117,13 @@ class priority_executor
     enum class priority { high, low };
 
     void
-    enqueue_under_lock(chain_holder&& h, priority p) const noexcept
+    enqueue_under_lock(coroutine_chain_holder&& h, priority p) const noexcept
     {
         (p == priority::high ? state_->high : state_->low).push(std::move(h));
     }
 
     void
-    post_with_priority(chain_holder&& h, priority p) const
+    post_with_priority(coroutine_chain_holder&& h, priority p) const
     {
         bool first;
         {
@@ -142,7 +142,7 @@ class priority_executor
         auto inv = detail::make_priority_invoker(state_);
         auto& self = inv.h_.promise().self;
         self.h = inv.h_;
-        inner_ex_.post(chain_holder(self));
+        inner_ex_.post(coroutine_chain_holder(self));
     }
 
 public:
@@ -184,7 +184,7 @@ public:
     }
 
     std::coroutine_handle<>
-    dispatch(chain_holder&& h) const
+    dispatch(coroutine_chain_holder&& h) const
     {
         if(running_in_this_thread())
             return h.take_handle();
@@ -193,19 +193,19 @@ public:
     }
 
     void
-    post(chain_holder&& h) const
+    post(coroutine_chain_holder&& h) const
     {
         post_with_priority(std::move(h), priority::low);
     }
 
     void
-    post_high(chain_holder&& h) const
+    post_high(coroutine_chain_holder&& h) const
     {
         post_with_priority(std::move(h), priority::high);
     }
 
     void
-    post_low(chain_holder&& h) const
+    post_low(coroutine_chain_holder&& h) const
     {
         post_with_priority(std::move(h), priority::low);
     }

@@ -91,7 +91,7 @@ public:
         {
             for(;;)
             {
-                capy::chain_holder h;
+                capy::coroutine_chain_holder h;
                 {
                     std::lock_guard<std::mutex> lock(m_);
                     h = queue_.pop();
@@ -113,7 +113,7 @@ public:
 
     // Run a coroutine on the GUI thread.  Callable from any thread and
     // never blocks the caller.
-    void post_to_gui_thread(capy::chain_holder&& h)
+    void post_to_gui_thread(capy::coroutine_chain_holder&& h)
     {
         {
             std::lock_guard<std::mutex> lock(m_);
@@ -140,7 +140,7 @@ public:
         check(on_gui_thread(), "run() called off the GUI thread");
         for(;;)
         {
-            capy::chain_holder h;
+            capy::coroutine_chain_holder h;
             {
                 std::unique_lock<std::mutex> lock(m_);
                 cv_.wait(lock,
@@ -193,7 +193,7 @@ public:
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
+    std::coroutine_handle<> dispatch(capy::coroutine_chain_holder&& h) const
     {
         if(app_->runs_inline())
             return h.take_handle();  // resume inline by symmetric transfer
@@ -201,7 +201,7 @@ public:
         return std::noop_coroutine();
     }
 
-    void post(capy::chain_holder&& h) const
+    void post(capy::coroutine_chain_holder&& h) const
     {
         app_->post_to_gui_thread(std::move(h));
     }

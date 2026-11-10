@@ -57,13 +57,13 @@ public:
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(capy::chain_holder&& h) const
+    std::coroutine_handle<> dispatch(capy::coroutine_chain_holder&& h) const
     {
         post(std::move(h));
         return std::noop_coroutine();
     }
 
-    void post(capy::chain_holder&& h) const
+    void post(capy::coroutine_chain_holder&& h) const
     {
         auto* c = h.release();
         resume_or_abandon r(*c);
@@ -77,7 +77,7 @@ public:
             // coroutine up, so the post must not report it as still held.
             if(r.release())
             {
-                h = boost::capy::chain_holder(*c);
+                h = boost::capy::coroutine_chain_holder(*c);
                 throw;
             }
         }

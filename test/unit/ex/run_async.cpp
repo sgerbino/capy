@@ -92,14 +92,14 @@ struct sync_executor
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         if(dispatch_count_)
             ++(*dispatch_count_);
         return h.take_handle();
     }
 
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         h.resume();
     }
@@ -134,13 +134,13 @@ struct queue_executor
     void on_work_started() const noexcept {}
     void on_work_finished() const noexcept {}
 
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         queue_->push(*h.release());
         return std::noop_coroutine();
     }
 
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         queue_->push(*h.release());
     }
@@ -182,12 +182,12 @@ struct refusing_executor
     void on_work_started() const noexcept { ++*work_; }
     void on_work_finished() const noexcept { --*work_; }
 
-    std::coroutine_handle<> dispatch(chain_holder&&) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&&) const
     {
         throw_test_exception("dispatch");
     }
 
-    void post(chain_holder&&) const
+    void post(coroutine_chain_holder&&) const
     {
         throw_test_exception("post");
     }

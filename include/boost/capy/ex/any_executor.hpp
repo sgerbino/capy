@@ -13,7 +13,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
-#include <boost/capy/ex/chain_holder.hpp>
+#include <boost/capy/ex/coroutine_chain_holder.hpp>
 #include <boost/capy/detail/type_id.hpp>
 #include <concepts>
 #include <coroutine>
@@ -90,8 +90,9 @@ class any_executor
         virtual execution_context& context() const noexcept = 0;
         virtual void on_work_started() const noexcept = 0;
         virtual void on_work_finished() const noexcept = 0;
-        virtual std::coroutine_handle<> dispatch(chain_holder&) const = 0;
-        virtual void post(chain_holder&) const = 0;
+        virtual std::coroutine_handle<>
+        dispatch(coroutine_chain_holder&) const = 0;
+        virtual void post(coroutine_chain_holder&) const = 0;
         virtual bool equals(impl_base const*) const noexcept = 0;
         virtual detail::type_info const& target_type() const noexcept = 0;
         virtual void const* target_ptr() const noexcept = 0;
@@ -123,12 +124,13 @@ class any_executor
             ex_.on_work_finished();
         }
 
-        std::coroutine_handle<> dispatch(chain_holder& h) const override
+        std::coroutine_handle<>
+        dispatch(coroutine_chain_holder& h) const override
         {
             return ex_.dispatch(std::move(h));
         }
 
-        void post(chain_holder& h) const override
+        void post(coroutine_chain_holder& h) const override
         {
             ex_.post(std::move(h));
         }
@@ -266,7 +268,7 @@ public:
 
         @pre This instance holds a valid executor.
     */
-    std::coroutine_handle<> dispatch(chain_holder&& h) const
+    std::coroutine_handle<> dispatch(coroutine_chain_holder&& h) const
     {
         return p_->dispatch(h);
     }
@@ -282,7 +284,7 @@ public:
 
         @pre This instance holds a valid executor.
     */
-    void post(chain_holder&& h) const
+    void post(coroutine_chain_holder&& h) const
     {
         p_->post(h);
     }

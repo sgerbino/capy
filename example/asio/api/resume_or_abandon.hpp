@@ -11,14 +11,14 @@
 #define CAPY_EXAMPLE_RESUME_OR_ABANDON_HPP
 
 #include <boost/capy/continuation.hpp>
-#include <boost/capy/ex/chain_holder.hpp>
+#include <boost/capy/ex/coroutine_chain_holder.hpp>
 #include <boost/capy/ex/frame_allocator.hpp>
 
 // Resumes its coroutine when Asio runs it; gives it up when Asio
 // destroys it unrun, as when its io_context is destroyed.
 class resume_or_abandon
 {
-    boost::capy::chain_holder h_;
+    boost::capy::coroutine_chain_holder h_;
 
 public:
     explicit resume_or_abandon(boost::capy::continuation& c) noexcept

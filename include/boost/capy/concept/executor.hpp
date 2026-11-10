@@ -13,7 +13,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
-#include <boost/capy/ex/chain_holder.hpp>
+#include <boost/capy/ex/coroutine_chain_holder.hpp>
 
 #include <concepts>
 #include <coroutine>
@@ -116,7 +116,7 @@ class execution_context;
 
     The library propagates a frame allocator via thread-local
     storage. A custom executor's event loop drains its work queue
-    with @ref chain_holder::resume, which saves and restores the
+    with @ref coroutine_chain_holder::resume, which saves and restores the
     thread-local frame allocator around the call, preventing a
     resumed coroutine from permanently overwriting the caller's
     value. A loop that holds a raw `std::coroutine_handle<>` must
@@ -128,12 +128,12 @@ class execution_context;
     Once `ctx.shutdown()` has begun, the context runs no more work.
     `dispatch` and `post` remain valid until the context is destroyed,
     but never run the coroutine they are given: an executor that
-    returns without taking the @ref chain_holder leaves it with the
+    returns without taking the @ref coroutine_chain_holder leaves it with the
     caller, whose holder abandons the coroutine. Otherwise it keeps the
     holder no later than the context's destruction. Take the parameter
-    as `chain_holder&&`, not by value, so that a `post` that throws has
-    neither queued nor abandoned the coroutine; the caller still holds
-    it. Dropping a holder inside `post` may unwind the chain before
+    as `coroutine_chain_holder&&`, not by value, so that a `post` that throws
+    has neither queued nor abandoned the coroutine; the caller still holds it.
+    Dropping a holder inside `post` may unwind the chain before
     `post` returns, so it is the executor's last touch of the executor
     object itself, which may live in a frame the unwind destroys. Copy,
     comparison, `context()`,
@@ -149,7 +149,7 @@ class execution_context;
     them where an exception cannot propagate, and `std::terminate` is
     called: while a @ref task is suspending, which includes
     @ref when_all and @ref when_any starting their children and
-    @ref run moving to its executor; when a @ref chain_holder posts an
+    @ref run moving to its executor; when a @ref coroutine_chain_holder posts an
     unwind; when a join or a @ref run boundary resumes the
     coroutine awaiting it; and when @ref async_mutex, @ref async_event
     or @ref async_waker resumes a waiter, whether from an unlock, a
@@ -171,7 +171,7 @@ template<class E>
 concept Executor =
     std::is_nothrow_copy_constructible_v<E> &&
     std::is_nothrow_move_constructible_v<E> &&
-    requires(E& e, E const& ce, E const& ce2, chain_holder h) {
+    requires(E& e, E const& ce, E const& ce2, coroutine_chain_holder h) {
         { ce == ce2 } noexcept -> std::convertible_to<bool>;
         { ce.context() } noexcept;
         requires std::is_lvalue_reference_v<decltype(ce.context())> &&

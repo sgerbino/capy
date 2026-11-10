@@ -86,8 +86,8 @@ namespace capy {
 
     @li The object owns the frame, and destroying the object destroys
         it; a destroyed frame never destroys its continuation. A chain
-        given up through a @ref chain_holder is unwound from its owner downward,
-        each object destroying the frame it owns.
+        given up through a @ref coroutine_chain_holder is unwound from its owner
+        downward, each object destroying the frame it owns.
     @li Destroying the object, or assigning over it, while the frame is
         lent to an awaiting chain calls `std::terminate`, unless the
         chain's owner (`environment()->owner`) has been abandoned.

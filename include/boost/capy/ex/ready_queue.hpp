@@ -12,7 +12,7 @@
 
 #include <boost/capy/detail/config.hpp>
 #include <boost/capy/continuation.hpp>
-#include <boost/capy/ex/chain_holder.hpp>
+#include <boost/capy/ex/coroutine_chain_holder.hpp>
 
 #include <cstdint>
 #include <type_traits>
@@ -39,7 +39,7 @@ class ready_node
     Executors need a queue of suspended coroutines, and each coroutine
     must be given up if the queue dies first. This queue links entries
     through a slot in the @ref continuation that only this type can
-    touch, and owns each entry the way a @ref chain_holder does.
+    touch, and owns each entry the way a @ref coroutine_chain_holder does.
 
     `ready_queue<>` holds only coroutines. `ready_queue<Op>` also holds
     pointers to `Op`, in one order, for a scheduler that mixes
@@ -66,7 +66,7 @@ class ready_node
     @tparam Op The operation type, derived from @ref ready_node, or
         `void` for a queue of coroutines alone.
 
-    @see chain_holder
+    @see coroutine_chain_holder
 */
 template<class Op = void>
 class ready_queue;
@@ -114,7 +114,7 @@ public:
 
         @param h The holder to take from; it owns nothing afterward.
     */
-    void push(chain_holder&& h) noexcept
+    void push(coroutine_chain_holder&& h) noexcept
     {
         continuation* c = h.release();
         c->reserved_ = nullptr;
@@ -130,7 +130,7 @@ public:
         @return A holder of the coroutine, or an empty holder if the
             queue is empty.
     */
-    chain_holder pop() noexcept
+    coroutine_chain_holder pop() noexcept
     {
         if(!head_)
             return {};
@@ -138,7 +138,7 @@ public:
         head_ = static_cast<continuation*>(c->reserved_);
         if(!head_)
             tail_ = nullptr;
-        return chain_holder(*c);
+        return coroutine_chain_holder(*c);
     }
 
     /** Remove every entry, giving up each queued coroutine.
@@ -307,9 +307,9 @@ public:
 
             @return A holder of the coroutine.
         */
-        chain_holder take() noexcept
+        coroutine_chain_holder take() noexcept
         {
-            return chain_holder(*as_cont(std::exchange(e_, nullptr)));
+            return coroutine_chain_holder(*as_cont(std::exchange(e_, nullptr)));
         }
     };
 
@@ -358,7 +358,7 @@ public:
 
         @param h The holder to take from; it owns nothing afterward.
     */
-    void push(chain_holder&& h) noexcept
+    void push(coroutine_chain_holder&& h) noexcept
     {
         push_entry(reinterpret_cast<void*>(
             reinterpret_cast<std::uintptr_t>(h.release()) | cont_bit));

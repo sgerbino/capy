@@ -109,7 +109,7 @@ struct when_all_core
         lost_.store(true, std::memory_order_relaxed);
         stop_source_.request_stop();
         if(remaining_count_.fetch_sub(1, std::memory_order_acq_rel) == 1)
-            std::ignore = chain_holder(continuation_);
+            std::ignore = coroutine_chain_holder(continuation_);
     }
 
     explicit when_all_core(std::size_t count) noexcept
@@ -291,7 +291,7 @@ struct when_all_runner
                         return detail::symmetric_transfer(std::noop_coroutine());
                     // Dropped here when a branch was lost: the parent
                     // unwinds instead of resuming.
-                    chain_holder parent(cont);
+                    coroutine_chain_holder parent(cont);
                     if(lost->load(std::memory_order_relaxed))
                         return detail::symmetric_transfer(std::noop_coroutine());
                     return detail::symmetric_transfer(caller_env->executor.dispatch(std::move(parent)));
