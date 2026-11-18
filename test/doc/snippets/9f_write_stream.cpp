@@ -44,9 +44,9 @@ static_assert(!capy::WriteStream<capy::test::read_stream>);
 namespace api_sketch {
 
 // tag::write_signature[]
-auto write(capy::WriteStream auto& stream,
-           capy::ConstBufferSequence auto buffers)
-    -> capy::task<capy::results<std::size_t>>;
+capy::ContextAwaitable auto write(
+    capy::WriteStream auto& stream,
+    capy::ConstBufferSequence auto buffers);
 // end::write_signature[]
 
 // tag::write_now_sketch[]

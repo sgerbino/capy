@@ -16,6 +16,8 @@
 #include <boost/capy/task.hpp>
 #include <boost/capy/buffers.hpp>
 #include <boost/capy/detail/consuming_buffers.hpp>
+#include <boost/capy/concept/context_awaitable.hpp>
+#include <boost/capy/concept/decomposes_to.hpp>
 #include <boost/capy/concept/write_stream.hpp>
 #include <system_error>
 
@@ -23,6 +25,40 @@
 
 namespace boost {
 namespace capy {
+
+namespace detail {
+
+// A stream whose `write` drains a whole buffer sequence in one
+// operation, with the result the loop would produce.
+template<class S, class CB>
+concept stream_writes_all = requires(S& s, CB const& b) {
+    { s.write(b) } -> ContextAwaitable;
+    requires awaitable_decomposes_to<
+        decltype(s.write(b)), std::error_code, std::size_t>;
+};
+
+template <WriteStream S, ConstBufferSequence CB>
+task<results<std::size_t>> write_loop(S& stream, CB buffers)
+{
+    detail::consuming_buffers consuming(buffers);
+    std::size_t const total_size = buffer_size(buffers);
+    std::size_t total_written = 0;
+
+    while(total_written < total_size)
+    {
+        auto [ec, n] = co_await stream.write_some(consuming.data());
+        consuming.consume(n);
+        total_written += n;
+        // A contingency that still completed the transfer is a success:
+        // report it only when not all bytes were written.
+        if(ec && total_written < total_size)
+            co_return {ec, total_written};
+    }
+
+    co_return {std::error_code(), total_written};
+}
+
+} // namespace detail
 
 /** Write an entire buffer sequence to a stream.
 
@@ -74,12 +110,17 @@ namespace capy {
     sequence represented by `buffers` ends
     before the coroutine finishes, the behavior is undefined.
 
-    @return A task yielding `results<std::size_t>` whose second element
-    is the number of bytes written.
+    @return An awaitable yielding `results<std::size_t>` whose second
+    element is the number of bytes written.
 
     @par Remarks
 
     Supports _ContextAwaitable cancellation_.
+
+    A stream may have a member `write( buffers )` that writes the
+    whole sequence in one operation. That operation then replaces
+    the loop and spares a coroutine frame. Its result must follow
+    the rules above. Otherwise the awaitable is a `task`.
 
     @par Example
 
@@ -89,24 +130,12 @@ namespace capy {
     @see @ref WriteStream, @ref ConstBufferSequence, @ref ContextAwaitable, @ref results, @ref cond
 */
 template <WriteStream S, ConstBufferSequence CB>
-auto write(S& stream, CB buffers) -> task<results<std::size_t>>
+auto write(S& stream, CB buffers)
 {
-    detail::consuming_buffers consuming(buffers);
-    std::size_t const total_size = buffer_size(buffers);
-    std::size_t total_written = 0;
-
-    while(total_written < total_size)
-    {
-        auto [ec, n] = co_await stream.write_some(consuming.data());
-        consuming.consume(n);
-        total_written += n;
-        // A contingency that still completed the transfer is a success:
-        // report it only when not all bytes were written.
-        if(ec && total_written < total_size)
-            co_return {ec, total_written};
-    }
-
-    co_return {std::error_code(), total_written};
+    if constexpr (detail::stream_writes_all<S, CB>)
+        return stream.write(buffers);
+    else
+        return detail::write_loop(stream, std::move(buffers));
 }
 
 } // namespace capy

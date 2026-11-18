@@ -33,6 +33,8 @@ include::example$snippets/9f_write_stream.cpp[tag=write_signature]
 
 Loops `write_some` until the entire buffer sequence is consumed. Always suspends (returns cpp:task[]). No frame caching.
 
+A stream can supply its own `write(buffers)` that writes the whole sequence in one operation, with the same results. cpp:write[] then forwards to it and skips the loop and its frame.
+
 === `write_now` (class template)
 
 [source,cpp]

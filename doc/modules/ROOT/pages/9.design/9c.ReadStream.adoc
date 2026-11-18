@@ -31,6 +31,8 @@ include::example$snippets/9c_read_stream.cpp[tag=read_signature,indent=0]
 
 Loops `read_some` until the entire buffer sequence is filled or an error (including EOF) occurs. On success, `n == buffer_size(buffers)`.
 
+A stream can supply its own `read(buffers)` that fills the whole sequence in one operation, with the same results. cpp:read[] then forwards to it and spares the loop's xref:glossary.adoc#coroutine-frame[coroutine frame]. Otherwise it returns a cpp:task[].
+
 [source,cpp]
 ----
 include::example$snippets/9c_read_stream.cpp[tag=read_header,indent=0]

@@ -10,6 +10,7 @@
 // Test that header file is self-contained.
 #include <boost/capy/read.hpp>
 
+#include <boost/capy/buffers/buffer_copy.hpp>
 #include <boost/capy/buffers/make_buffer.hpp>
 #include <boost/capy/cond.hpp>
 #include <boost/capy/error.hpp>
@@ -23,6 +24,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 namespace boost {
 namespace capy {
@@ -161,6 +164,54 @@ struct contingent_read_stream
             }
         };
         return awaitable{this, buffers};
+    }
+};
+
+// Mock with a member read that fills the whole sequence in one
+// operation, so read() must forward to it instead of looping.
+struct read_all_stream
+{
+    std::string data;
+    int read_some_calls = 0;
+    int read_calls      = 0;
+    contingent_read_stream inner{{}, 0};
+
+    template<MutableBufferSequence MB>
+    auto
+    read_some(MB buffers)
+    {
+        ++read_some_calls;
+        return inner.read_some(std::move(buffers));
+    }
+
+    template<MutableBufferSequence MB>
+    auto
+    read(MB buffers)
+    {
+        struct awaitable
+        {
+            read_all_stream* self_;
+            MB buffers_;
+
+            bool await_ready() const noexcept { return true; }
+
+            void await_suspend(
+                std::coroutine_handle<>, await_context const*) const noexcept {}
+
+            results<std::size_t>
+            await_resume()
+            {
+                ++self_->read_calls;
+                std::size_t const n = buffer_copy(
+                    buffers_,
+                    const_buffer(self_->data.data(), self_->data.size()));
+                self_->data.erase(0, n);
+                if(n < buffer_size(buffers_))
+                    return {error::eof, n};
+                return {std::error_code(), n};
+            }
+        };
+        return awaitable{this, std::move(buffers)};
     }
 };
 
@@ -378,6 +429,40 @@ struct read_test
     }
 
     void
+    testForwardsToStreamRead()
+    {
+        static_assert(std::is_same_v<
+            decltype(read(std::declval<read_all_stream&>(), mutable_buffer())),
+            decltype(std::declval<read_all_stream&>().read(mutable_buffer()))>);
+        static_assert(std::is_same_v<
+            decltype(read(std::declval<test::read_stream&>(), mutable_buffer())),
+            task<results<std::size_t>>>);
+
+        BOOST_TEST(test::fuse().inert([](test::fuse&) -> task<void>
+        {
+            read_all_stream rs{"helloworld"};
+            buffer_array_factory bf(5, 5);
+            auto [ec, n] = co_await read(rs, bf.buffer());
+            BOOST_TEST(! ec);
+            BOOST_TEST_EQ(n, 10u);
+            BOOST_TEST_EQ(bf.combined(), "helloworld");
+            BOOST_TEST_EQ(rs.read_calls, 1);
+            BOOST_TEST_EQ(rs.read_some_calls, 0);
+        }));
+
+        BOOST_TEST(test::fuse().inert([](test::fuse&) -> task<void>
+        {
+            read_all_stream rs{"abc"};
+            single_buffer_factory bf(8);
+            auto [ec, n] = co_await read(rs, bf.buffer());
+            BOOST_TEST(ec == cond::eof);
+            BOOST_TEST_EQ(n, 3u);
+            BOOST_TEST_EQ(rs.read_calls, 1);
+            BOOST_TEST_EQ(rs.read_some_calls, 0);
+        }));
+    }
+
+    void
     testReadStream()
     {
         testReadSingleBuffer();
@@ -385,6 +470,7 @@ struct read_test
         testReadBufferPair();
         testReadStoredAwaitableTemporarySequence();
         testFullTransferContingency();
+        testForwardsToStreamRead();
     }
 
     //----------------------------------------------------------

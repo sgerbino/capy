@@ -10,6 +10,7 @@
 // Test that header file is self-contained.
 #include <boost/capy/write.hpp>
 
+#include <boost/capy/buffers/buffer_copy.hpp>
 #include <boost/capy/buffers/make_buffer.hpp>
 #include <boost/capy/error.hpp>
 #include <boost/capy/test/fuse.hpp>
@@ -20,6 +21,8 @@
 #include <array>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 namespace boost {
 namespace capy {
@@ -153,6 +156,52 @@ struct contingent_write_stream
             }
         };
         return awaitable{this, buffers};
+    }
+};
+
+// Mock with a member write that drains the whole sequence in one
+// operation, so write() must forward to it instead of looping.
+struct write_all_stream
+{
+    std::string data;
+    int write_some_calls = 0;
+    int write_calls      = 0;
+    contingent_write_stream inner{{}, 0};
+
+    template<ConstBufferSequence CB>
+    auto
+    write_some(CB buffers)
+    {
+        ++write_some_calls;
+        return inner.write_some(std::move(buffers));
+    }
+
+    template<ConstBufferSequence CB>
+    auto
+    write(CB buffers)
+    {
+        struct awaitable
+        {
+            write_all_stream* self_;
+            CB buffers_;
+
+            bool await_ready() const noexcept { return true; }
+
+            void await_suspend(
+                std::coroutine_handle<>, await_context const*) const noexcept {}
+
+            results<std::size_t>
+            await_resume()
+            {
+                ++self_->write_calls;
+                std::size_t const n = buffer_size(buffers_);
+                std::string chunk(n, '\0');
+                buffer_copy(mutable_buffer(chunk.data(), n), buffers_);
+                self_->data += chunk;
+                return {std::error_code(), n};
+            }
+        };
+        return awaitable{this, std::move(buffers)};
     }
 };
 
@@ -347,6 +396,30 @@ struct write_test
     }
 
     void
+    testForwardsToStreamWrite()
+    {
+        static_assert(std::is_same_v<
+            decltype(write(std::declval<write_all_stream&>(), const_buffer())),
+            decltype(std::declval<write_all_stream&>().write(const_buffer()))>);
+        static_assert(std::is_same_v<
+            decltype(write(std::declval<test::write_stream&>(), const_buffer())),
+            task<results<std::size_t>>>);
+
+        BOOST_TEST(test::fuse().inert([](test::fuse&) -> task<void>
+        {
+            write_all_stream ws;
+            std::array<const_buffer, 2> bufs{{
+                const_buffer("hello", 5), const_buffer("world", 5)}};
+            auto [ec, n] = co_await write(ws, bufs);
+            BOOST_TEST(! ec);
+            BOOST_TEST_EQ(n, 10u);
+            BOOST_TEST_EQ(ws.data, "helloworld");
+            BOOST_TEST_EQ(ws.write_calls, 1);
+            BOOST_TEST_EQ(ws.write_some_calls, 0);
+        }));
+    }
+
+    void
     testWriteStream()
     {
         testWriteSingleBuffer();
@@ -354,6 +427,7 @@ struct write_test
         testWriteBufferPair();
         testWriteStoredAwaitableTemporarySequence();
         testFullTransferContingency();
+        testForwardsToStreamWrite();
     }
 
     //----------------------------------------------------------

@@ -42,9 +42,9 @@ static_assert(capy::ReadStream<capy::test::read_stream>);
 namespace composed {
 
 // tag::read_signature[]
-auto read(capy::ReadStream auto& stream,
-          capy::MutableBufferSequence auto buffers)
-    -> capy::task<capy::results<std::size_t>>;
+capy::ContextAwaitable auto read(
+    capy::ReadStream auto& stream,
+    capy::MutableBufferSequence auto buffers);
 // end::read_signature[]
 
 } // namespace composed
